@@ -50,16 +50,29 @@ password=your_api_token
       jenkins-api-token "your_api_token")
 ```
 
-## Keybindings in `*Jenkins*` Buffer
+## Keybindings
+
+### In `*Jenkins*` (Jobs List)
 
 | Key | Action |
 | --- | --- |
-| `g` | Refresh jobs list |
-| `f` | Toggle filter (all jobs vs. running only) |
+| `RET` / `h` | View build history for job at point |
+| `c` | View console output for latest build |
 | `b` | Trigger / build job at point (prompts for parameters) |
-| `RET` / `c` | View console output for latest build |
-| `k` | Abort / stop currently active build |
+| `f` | Toggle filter (all jobs vs. running only) |
+| `k` | Abort / stop active build |
+| `g` | Refresh jobs list |
 | `o` | Open job in external browser |
+| `q` | Quit window |
+
+### In `*Jenkins-History: <job>*` (Build History)
+
+| Key | Action |
+| --- | --- |
+| `RET` / `c` | View console output for selected build number |
+| `k` | Abort selected running build |
+| `g` | Refresh build history |
+| `o` | Open build in external browser |
 | `q` | Quit window |
 
 ## License

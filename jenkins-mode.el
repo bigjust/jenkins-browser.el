@@ -326,11 +326,12 @@ Converts `:null` and `:json-false` values to nil."
           (message "Triggered '%s' with parameters." job-name))))
     (run-at-time 2 nil #'jenkins-refresh)))
 
-(defun jenkins-view-console (job-name)
-  "View the console log for the latest build of JOB-NAME."
+(defun jenkins-view-console (job-name &optional build-number)
+  "View the console log for BUILD-NUMBER (default \"lastBuild\") of JOB-NAME."
   (interactive (list (or (jenkins-current-job) (user-error "No job selected"))))
-  (let* ((url (format "%s/job/%s/lastBuild/consoleText" (jenkins-base-url) job-name))
-         (buf (get-buffer-create (format "*Jenkins-Console: %s*" job-name)))
+  (let* ((build-id (or (and build-number (format "%s" build-number)) "lastBuild"))
+         (url (format "%s/job/%s/%s/consoleText" (jenkins-base-url) job-name build-id))
+         (buf (get-buffer-create (format "*Jenkins-Console: %s #%s*" job-name build-id)))
          (output (jenkins--request "GET" url)))
     (with-current-buffer buf
       (read-only-mode -1)
@@ -354,6 +355,127 @@ Converts `:null` and `:json-false` values to nil."
   (interactive (list (or (jenkins-current-job) (user-error "No job selected"))))
   (browse-url (format "%s/job/%s" (jenkins-base-url) job-name)))
 
+;;; --- Build History Mode ---
+
+(defvar-local jenkins--history-job-name nil
+  "The job name for the current build history buffer.")
+
+(defun jenkins--format-timestamp (millis)
+  "Convert MILLIS epoch timestamp to formatted date/time string."
+  (if (or (null millis) (not (numberp millis)) (<= millis 0))
+      "-"
+    (format-time-string "%Y-%m-%d %H:%M" (seconds-to-time (/ millis 1000.0)))))
+
+(defun jenkins--fetch-build-history (job-name)
+  "Fetch builds list for JOB-NAME."
+  (let* ((tree "builds[number,result,building,duration,timestamp,displayName,description]")
+         (url (format "%s/job/%s/api/json?tree=%s"
+                      (jenkins-base-url)
+                      (url-hexify-string job-name)
+                      (url-hexify-string tree)))
+         (resp (jenkins--request "GET" url)))
+    (if (hash-table-p resp)
+        (jenkins--get "builds" resp)
+      nil)))
+
+(defun jenkins--history-entries (job-name)
+  "Generate tabulated list entries for build history of JOB-NAME."
+  (let ((builds (jenkins--fetch-build-history job-name))
+        entries)
+    (dolist (b (if (listp builds) builds nil))
+      (when (hash-table-p b)
+        (let* ((num (jenkins--get "number" b))
+               (result (jenkins--get "result" b))
+               (building (jenkins--get "building" b))
+               (duration (jenkins--get "duration" b))
+               (timestamp (jenkins--get "timestamp" b))
+               (status-str (jenkins--format-status nil building result)))
+          (when num
+            (push (list num
+                        (vector (propertize (format "#%d" num) 'face 'font-lock-keyword-face)
+                                status-str
+                                (jenkins--format-timestamp timestamp)
+                                (jenkins--format-duration duration)))
+                  entries)))))
+    (nreverse entries)))
+
+(defvar jenkins-build-history-mode-map
+  (let ((map (make-sparse-keymap)))
+    (set-keymap-parent map tabulated-list-mode-map)
+    (define-key map (kbd "g")   #'jenkins-history-refresh)
+    (define-key map (kbd "RET") #'jenkins-history-view-console)
+    (define-key map (kbd "c")   #'jenkins-history-view-console)
+    (define-key map (kbd "k")   #'jenkins-history-abort-build)
+    (define-key map (kbd "o")   #'jenkins-history-open-in-browser)
+    map)
+  "Keymap for `jenkins-build-history-mode` buffers.")
+
+(define-derived-mode jenkins-build-history-mode tabulated-list-mode "Jenkins-History"
+  "Major mode for browsing Jenkins build history.
+
+\\{jenkins-build-history-mode-map}"
+  (setq tabulated-list-format
+        [("Build"     10 t)
+         ("Status"    12 t)
+         ("Timestamp" 18 t)
+         ("Duration"  12 nil)])
+  (setq tabulated-list-padding 2)
+  (setq tabulated-list-sort-key (cons "Build" t))
+  (add-hook 'tabulated-list-revert-hook #'jenkins-history-refresh nil t)
+  (tabulated-list-init-header))
+
+(defun jenkins-history-refresh ()
+  "Refresh the current build history buffer."
+  (interactive)
+  (when jenkins--history-job-name
+    (setq tabulated-list-entries (jenkins--history-entries jenkins--history-job-name))
+    (tabulated-list-print t)))
+
+(defun jenkins-current-build-number ()
+  "Get the build number at point in a build history buffer."
+  (tabulated-list-get-id))
+
+(defun jenkins-history-view-console (&optional build-num)
+  "View console output for BUILD-NUM of the current job."
+  (interactive (list (or (jenkins-current-build-number) (user-error "No build selected"))))
+  (unless (and jenkins--history-job-name build-num)
+    (user-error "Cannot view console: missing job or build number"))
+  (jenkins-view-console jenkins--history-job-name build-num))
+
+(defun jenkins-history-abort-build (&optional build-num)
+  "Abort BUILD-NUM for the current job."
+  (interactive (list (or (jenkins-current-build-number) (user-error "No build selected"))))
+  (unless (and jenkins--history-job-name build-num)
+    (user-error "Cannot abort: missing job or build number"))
+  (when (yes-or-no-p (format "Abort %s #%s? " jenkins--history-job-name build-num))
+    (let ((url (format "%s/job/%s/%s/stop" (jenkins-base-url) jenkins--history-job-name build-num)))
+      (jenkins--request "POST" url)
+      (message "Requested abort for %s #%s" jenkins--history-job-name build-num)
+      (run-at-time 2 nil #'jenkins-history-refresh))))
+
+(defun jenkins-history-open-in-browser (&optional build-num)
+  "Open BUILD-NUM in external browser."
+  (interactive (list (or (jenkins-current-build-number) (user-error "No build selected"))))
+  (browse-url (format "%s/job/%s/%s" (jenkins-base-url) jenkins--history-job-name (or build-num ""))))
+
+(defun jenkins-view-build-history (&optional job-name)
+  "View the build history for JOB-NAME."
+  (interactive (list (or (jenkins-current-job)
+                         (completing-read "Job: "
+                                          (delq nil
+                                                (mapcar (lambda (j)
+                                                          (and (hash-table-p j)
+                                                               (jenkins--get "name" j)))
+                                                        (jenkins--fetch-jobs)))))))
+  (unless job-name
+    (user-error "No job selected"))
+  (let ((buf (get-buffer-create (format "*Jenkins-History: %s*" job-name))))
+    (with-current-buffer buf
+      (jenkins-build-history-mode)
+      (setq jenkins--history-job-name job-name)
+      (jenkins-history-refresh))
+    (pop-to-buffer buf)))
+
 ;;; --- Keymap ---
 
 (defvar jenkins-mode-map
@@ -361,9 +483,10 @@ Converts `:null` and `:json-false` values to nil."
     (set-keymap-parent map tabulated-list-mode-map)
     (define-key map (kbd "g")   #'jenkins-refresh)
     (define-key map (kbd "b")   #'jenkins-trigger-job)          ;; [b]uild / trigger
-    (define-key map (kbd "RET") #'jenkins-view-console)          ;; view console
-    (define-key map (kbd "c")   #'jenkins-view-console)
-    (define-key map (kbd "k")   #'jenkins-abort-build)           ;; [k]ill / abort
+    (define-key map (kbd "RET") #'jenkins-view-build-history)    ;; view build history
+    (define-key map (kbd "h")   #'jenkins-view-build-history)    ;; [h]istory
+    (define-key map (kbd "c")   #'jenkins-view-console)          ;; latest [c]onsole
+    (define-key map (kbd "k")   #'jenkins-abort-build)           ;; [k]ill / abort latest
     (define-key map (kbd "f")   #'jenkins-toggle-running-filter) ;; [f]ilter running
     (define-key map (kbd "o")   #'jenkins-open-in-browser)       ;; [o]pen in browser
     map)
