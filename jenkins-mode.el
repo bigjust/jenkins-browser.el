@@ -298,6 +298,13 @@ METHOD, URL-STR, POST-DATA and CONTENT-TYPE are as for `jenkins--http'."
       "-"
     (format-time-string "%Y-%m-%d %H:%M" (seconds-to-time (/ millis 1000.0)))))
 
+(defun jenkins--format-culprits (culprits)
+  "Format the list of CULPRITS hash-tables as a comma-separated author string."
+  (let ((names (when (listp culprits)
+                 (delq nil (mapcar (lambda (c) (jenkins--get "fullName" c))
+                                   culprits)))))
+    (if names (string-join names ", ") "-")))
+
 (defun jenkins--format-status (color building result)
   "Format build status with text properties."
   (cond
@@ -549,7 +556,7 @@ JOB is a slash-separated path such as \"folder/job\"."
 
 (defun jenkins--fetch-build-history (job)
   "Fetch builds list for JOB."
-  (let* ((tree (format "builds[number,result,building,duration,timestamp,displayName,description]{0,%d}"
+  (let* ((tree (format "builds[number,result,building,duration,timestamp,displayName,description,culprits[fullName]]{0,%d}"
                        jenkins-history-limit))
          (resp (jenkins--request
                 "GET" (jenkins--job-url job (format "/api/json?tree=%s"
@@ -574,6 +581,7 @@ JOB is a slash-separated path such as \"folder/job\"."
                         (vector (propertize (format "#%d" num) 'face 'font-lock-keyword-face)
                                 status-str
                                 (jenkins--format-timestamp timestamp)
+                                (jenkins--format-culprits (jenkins--get "culprits" b))
                                 (jenkins--format-duration duration)))
                   entries)))))
     (nreverse entries)))
@@ -645,6 +653,7 @@ JOB is a slash-separated path such as \"folder/job\"."
         [("Build"     10 t)
          ("Status"    12 t)
          ("Timestamp" 18 t)
+         ("Author"    24 nil)
          ("Duration"  12 nil)])
   (setq tabulated-list-padding 2)
   (setq tabulated-list-sort-key (cons "Build" t))
