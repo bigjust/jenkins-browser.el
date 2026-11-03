@@ -7,8 +7,8 @@
 
 ;;; Commentary:
 ;; An interactive major mode to list jobs, filter running builds, trigger
-;; parameterized and non-parameterized jobs, view live/latest console logs,
-;; and abort builds.
+;; parameterized and non-parameterized jobs, view build history, inspect
+;; console logs, and abort builds.
 ;;
 ;; Credentials and Jenkins URL can be configured via customize options or
 ;; automatically loaded from `~/.jenkins_jobs.ini`.
@@ -182,6 +182,12 @@ Converts `:null` and `:json-false` values to nil."
        ((> mins 0)  (format "%dm %02ds" mins (% secs 60)))
        (t           (format "%ds" secs))))))
 
+(defun jenkins--format-timestamp (millis)
+  "Convert MILLIS epoch timestamp to formatted date/time string."
+  (if (or (null millis) (not (numberp millis)) (<= millis 0))
+      "-"
+    (format-time-string "%Y-%m-%d %H:%M" (seconds-to-time (/ millis 1000.0)))))
+
 (defun jenkins--format-status (color building result)
   "Format build status with text properties."
   (cond
@@ -202,7 +208,7 @@ Converts `:null` and `:json-false` values to nil."
    (t
     (propertize (or result (and (stringp color) color) "NOT BUILT") 'face 'font-lock-comment-face))))
 
-;;; --- Tabulated List UI ---
+;;; --- Tabulated List UI for Jobs ---
 
 (defun jenkins--job-entries ()
   "Generate tabulated list entries from Jenkins jobs."
@@ -230,31 +236,7 @@ Converts `:null` and `:json-false` values to nil."
                   entries)))))
     (nreverse entries)))
 
-(define-derived-mode jenkins-mode tabulated-list-mode "Jenkins"
-  "Major mode for browsing and triggering Jenkins jobs.
-
-\\{jenkins-mode-map}"
-  (setq tabulated-list-format
-        [("Job Name" 40 t)
-         ("Status"   12 t)
-         ("Last #"   8  nil)
-         ("Duration" 12 nil)])
-  (setq tabulated-list-padding 2)
-  (setq tabulated-list-sort-key (cons "Job Name" nil))
-  (add-hook 'tabulated-list-revert-hook #'jenkins-refresh nil t)
-  (tabulated-list-init-header))
-
-;;; --- Interactive Commands ---
-
-;;;###autoload
-(defun jenkins ()
-  "Open the Jenkins jobs overview buffer."
-  (interactive)
-  (let ((buf (get-buffer-create "*Jenkins*")))
-    (with-current-buffer buf
-      (jenkins-mode)
-      (jenkins-refresh))
-    (pop-to-buffer buf)))
+;;; --- Interactive Commands for Jobs ---
 
 (defun jenkins-refresh ()
   "Refresh the Jenkins jobs list."
@@ -360,12 +342,6 @@ Converts `:null` and `:json-false` values to nil."
 (defvar-local jenkins--history-job-name nil
   "The job name for the current build history buffer.")
 
-(defun jenkins--format-timestamp (millis)
-  "Convert MILLIS epoch timestamp to formatted date/time string."
-  (if (or (null millis) (not (numberp millis)) (<= millis 0))
-      "-"
-    (format-time-string "%Y-%m-%d %H:%M" (seconds-to-time (/ millis 1000.0)))))
-
 (defun jenkins--fetch-build-history (job-name)
   "Fetch builds list for JOB-NAME."
   (let* ((tree "builds[number,result,building,duration,timestamp,displayName,description]")
@@ -398,31 +374,6 @@ Converts `:null` and `:json-false` values to nil."
                                 (jenkins--format-duration duration)))
                   entries)))))
     (nreverse entries)))
-
-(defvar jenkins-build-history-mode-map
-  (let ((map (make-sparse-keymap)))
-    (set-keymap-parent map tabulated-list-mode-map)
-    (define-key map (kbd "g")   #'jenkins-history-refresh)
-    (define-key map (kbd "RET") #'jenkins-history-view-console)
-    (define-key map (kbd "c")   #'jenkins-history-view-console)
-    (define-key map (kbd "k")   #'jenkins-history-abort-build)
-    (define-key map (kbd "o")   #'jenkins-history-open-in-browser)
-    map)
-  "Keymap for `jenkins-build-history-mode` buffers.")
-
-(define-derived-mode jenkins-build-history-mode tabulated-list-mode "Jenkins-History"
-  "Major mode for browsing Jenkins build history.
-
-\\{jenkins-build-history-mode-map}"
-  (setq tabulated-list-format
-        [("Build"     10 t)
-         ("Status"    12 t)
-         ("Timestamp" 18 t)
-         ("Duration"  12 nil)])
-  (setq tabulated-list-padding 2)
-  (setq tabulated-list-sort-key (cons "Build" t))
-  (add-hook 'tabulated-list-revert-hook #'jenkins-history-refresh nil t)
-  (tabulated-list-init-header))
 
 (defun jenkins-history-refresh ()
   "Refresh the current build history buffer."
@@ -476,21 +427,66 @@ Converts `:null` and `:json-false` values to nil."
       (jenkins-history-refresh))
     (pop-to-buffer buf)))
 
-;;; --- Keymap ---
+;;; --- Mode Definitions and Keymaps ---
 
-(defvar jenkins-mode-map
-  (let ((map (make-sparse-keymap)))
-    (set-keymap-parent map tabulated-list-mode-map)
-    (define-key map (kbd "g")   #'jenkins-refresh)
-    (define-key map (kbd "b")   #'jenkins-trigger-job)          ;; [b]uild / trigger
-    (define-key map (kbd "RET") #'jenkins-view-build-history)    ;; view build history
-    (define-key map (kbd "h")   #'jenkins-view-build-history)    ;; [h]istory
-    (define-key map (kbd "c")   #'jenkins-view-console)          ;; latest [c]onsole
-    (define-key map (kbd "k")   #'jenkins-abort-build)           ;; [k]ill / abort latest
-    (define-key map (kbd "f")   #'jenkins-toggle-running-filter) ;; [f]ilter running
-    (define-key map (kbd "o")   #'jenkins-open-in-browser)       ;; [o]pen in browser
-    map)
-  "Keymap for `jenkins-mode` buffers.")
+(defvar-keymap jenkins-build-history-mode-map
+  :doc "Keymap for `jenkins-build-history-mode` buffers."
+  :parent tabulated-list-mode-map
+  "g"   #'jenkins-history-refresh
+  "RET" #'jenkins-history-view-console
+  "c"   #'jenkins-history-view-console
+  "k"   #'jenkins-history-abort-build
+  "o"   #'jenkins-history-open-in-browser)
+
+(define-derived-mode jenkins-build-history-mode tabulated-list-mode "Jenkins-History"
+  "Major mode for browsing Jenkins build history.
+
+\\{jenkins-build-history-mode-map}"
+  (setq tabulated-list-format
+        [("Build"     10 t)
+         ("Status"    12 t)
+         ("Timestamp" 18 t)
+         ("Duration"  12 nil)])
+  (setq tabulated-list-padding 2)
+  (setq tabulated-list-sort-key (cons "Build" t))
+  (add-hook 'tabulated-list-revert-hook #'jenkins-history-refresh nil t)
+  (tabulated-list-init-header))
+
+(defvar-keymap jenkins-mode-map
+  :doc "Keymap for `jenkins-mode` buffers."
+  :parent tabulated-list-mode-map
+  "g"   #'jenkins-refresh
+  "b"   #'jenkins-trigger-job
+  "RET" #'jenkins-view-build-history
+  "h"   #'jenkins-view-build-history
+  "c"   #'jenkins-view-console
+  "k"   #'jenkins-abort-build
+  "f"   #'jenkins-toggle-running-filter
+  "o"   #'jenkins-open-in-browser)
+
+(define-derived-mode jenkins-mode tabulated-list-mode "Jenkins"
+  "Major mode for browsing and triggering Jenkins jobs.
+
+\\{jenkins-mode-map}"
+  (setq tabulated-list-format
+        [("Job Name" 40 t)
+         ("Status"   12 t)
+         ("Last #"   8  nil)
+         ("Duration" 12 nil)])
+  (setq tabulated-list-padding 2)
+  (setq tabulated-list-sort-key (cons "Job Name" nil))
+  (add-hook 'tabulated-list-revert-hook #'jenkins-refresh nil t)
+  (tabulated-list-init-header))
+
+;;;###autoload
+(defun jenkins ()
+  "Open the Jenkins jobs overview buffer."
+  (interactive)
+  (let ((buf (get-buffer-create "*Jenkins*")))
+    (with-current-buffer buf
+      (jenkins-mode)
+      (jenkins-refresh))
+    (pop-to-buffer buf)))
 
 (provide 'jenkins-mode)
 ;;; jenkins-mode.el ends here
