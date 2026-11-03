@@ -23,12 +23,24 @@
 ;; along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 ;;; Commentary:
-;; An interactive major mode to list jobs, filter running builds, trigger
-;; parameterized and non-parameterized jobs, view build history, inspect
-;; console logs, and abort builds.
+
+;; An interactive major mode to list jobs, navigate folders and multibranch
+;; projects, filter running builds, trigger parameterized and
+;; non-parameterized jobs, view build history (with authors), inspect console
+;; logs, and abort builds.
+;;
+;; Start with `M-x jenkins'.
 ;;
 ;; Credentials and Jenkins URL can be configured via customize options or
-;; automatically loaded from `~/.jenkins_jobs.ini`.
+;; automatically loaded from `~/.jenkins_jobs.ini'.
+;;
+;; Jobs are addressed by a slash-separated path such as "folder/sub/job".
+;; Jenkins job names cannot contain a slash, so this is unambiguous.
+;;
+;; Note: parsing uses `json-parse-string', so Emacs must have native JSON
+;; support (always the case in Emacs 30+, and in older builds with jansson).
+;;
+;; See the docs/ directory of the source repository for details.
 
 ;;; Code:
 
@@ -66,6 +78,13 @@ If nil, attempts to read from `~/.jenkins_jobs.ini`."
   :type 'file
   :group 'jenkins)
 
+(defcustom jenkins-view-name nil
+  "Name of a Jenkins view to use as the top-level job list.
+If nil, the jobs of the Jenkins root are listed.  The view only applies to
+the top-level buffer, not to folders opened from it."
+  :type '(choice (const :tag "No view" nil) string)
+  :group 'jenkins)
+
 (defcustom jenkins-auto-refresh-interval 15
   "Auto-refresh interval in seconds when in `jenkins-mode`.
 Set to 0 or nil to disable auto-refresh."
@@ -77,8 +96,19 @@ Set to 0 or nil to disable auto-refresh."
   :type 'integer
   :group 'jenkins)
 
+(defcustom jenkins-folder-class-regexp "Folder\\|MultiBranchProject"
+  "Regexp matching the Jenkins `_class' of jobs that contain other jobs."
+  :type 'regexp
+  :group 'jenkins)
+
 (defvar-local jenkins--filter-running-only nil
   "Non-nil if only running builds are displayed.")
+
+(defvar-local jenkins--folder nil
+  "Slash-separated folder path shown in this buffer, or nil for the root.")
+
+(defvar-local jenkins--history-job nil
+  "The slash-separated job path for the current build history buffer.")
 
 (defvar jenkins--refresh-timer nil
   "Timer object for periodic refresh.")
@@ -133,6 +163,25 @@ Set to 0 or nil to disable auto-refresh."
         (pass (jenkins--get-config "password")))
     (when (and user pass)
       (format "Basic %s" (base64-encode-string (format "%s:%s" user pass) t)))))
+
+;;; --- Job paths ---
+
+(defun jenkins--join-path (&rest parts)
+  "Join the non-empty strings in PARTS with a slash."
+  (string-join (cl-remove-if (lambda (p) (or (null p) (string-empty-p p))) parts)
+               "/"))
+
+(defun jenkins--job-path (job)
+  "Return the URL path fragment for JOB, e.g. \"/job/a/job/b\".
+JOB is a slash-separated string such as \"a/b\".  Each component is
+URL-encoded.  Return the empty string when JOB is nil or empty."
+  (mapconcat (lambda (name) (concat "/job/" (url-hexify-string name)))
+             (split-string (or job "") "/" t)
+             ""))
+
+(defun jenkins--job-url (job &optional suffix)
+  "Return the full URL of JOB, optionally followed by SUFFIX."
+  (concat (jenkins-base-url) (jenkins--job-path job) (or suffix "")))
 
 ;;; --- API & HTTP Helper ---
 
@@ -200,14 +249,26 @@ METHOD, URL-STR, POST-DATA and CONTENT-TYPE are as for `jenkins--http'."
 
 ;;; --- Core Jenkins Queries ---
 
-(defun jenkins--fetch-jobs ()
-  "Fetch all jobs and their last build metadata."
-  (let* ((tree "jobs[name,color,lastBuild[number,building,result,duration,timestamp,estimatedDuration]]")
-         (url (format "%s/api/json?tree=%s" (jenkins-base-url) (url-hexify-string tree)))
-         (resp (jenkins--request "GET" url)))
-    (if (hash-table-p resp)
-        (jenkins--get "jobs" resp)
-      nil)))
+(defun jenkins--jobs-url (folder)
+  "Return the API URL listing the jobs in FOLDER (nil for the root)."
+  (let ((tree "jobs[name,color,_class,lastBuild[number,building,result,duration,timestamp,estimatedDuration]]"))
+    (concat (jenkins-base-url)
+            (if (and (null folder) jenkins-view-name)
+                (concat "/view/" (url-hexify-string jenkins-view-name))
+              (jenkins--job-path folder))
+            "/api/json?tree=" (url-hexify-string tree))))
+
+(defun jenkins--fetch-jobs (&optional folder)
+  "Fetch all jobs in FOLDER (nil for the root) and their last build metadata."
+  (let ((resp (jenkins--request "GET" (jenkins--jobs-url folder))))
+    (when (hash-table-p resp)
+      (jenkins--get "jobs" resp))))
+
+(defun jenkins--folder-p (job)
+  "Return non-nil if the job hash-table JOB can contain other jobs."
+  (let ((class (jenkins--get "_class" job)))
+    (and (stringp class)
+         (string-match-p jenkins-folder-class-regexp class))))
 
 (defun jenkins--format-duration (millis)
   "Convert MILLIS to a human-readable duration."
@@ -250,26 +311,33 @@ METHOD, URL-STR, POST-DATA and CONTENT-TYPE are as for `jenkins--http'."
 ;;; --- Tabulated List UI for Jobs ---
 
 (defun jenkins--job-entries ()
-  "Generate tabulated list entries from Jenkins jobs."
-  (let ((jobs (jenkins--fetch-jobs))
+  "Generate tabulated list entries from Jenkins jobs.
+Each entry id is a cons (NAME . FOLDER-P)."
+  (let ((jobs (jenkins--fetch-jobs jenkins--folder))
         entries)
     (dolist (job (if (listp jobs) jobs nil))
       (when (hash-table-p job)
         (let* ((name (jenkins--get "name" job))
+               (folder-p (jenkins--folder-p job))
                (color (jenkins--get "color" job))
                (last-build (jenkins--get "lastBuild" job))
                (num (jenkins--get "number" last-build))
                (building (jenkins--get "building" last-build))
                (result (jenkins--get "result" last-build))
-               (duration (jenkins--get "duration" last-build))
-               (status-str (jenkins--format-status color building result)))
+               (duration (jenkins--get "duration" last-build)))
           (when (and name
-                     (or (not jenkins--filter-running-only)
+                     (or folder-p
+                         (not jenkins--filter-running-only)
                          building
                          (and (stringp color) (string-match-p "_anime$" color))))
-            (push (list name
-                        (vector (propertize name 'face 'font-lock-function-name-face)
-                                status-str
+            (push (list (cons name (and folder-p t))
+                        (vector (propertize (if folder-p (concat name "/") name)
+                                            'face (if folder-p
+                                                      'font-lock-type-face
+                                                    'font-lock-function-name-face))
+                                (if folder-p
+                                    (propertize "FOLDER" 'face 'font-lock-type-face)
+                                  (jenkins--format-status color building result))
                                 (if num (format "#%s" num) "-")
                                 (jenkins--format-duration duration)))
                   entries)))))
@@ -284,7 +352,8 @@ METHOD, URL-STR, POST-DATA and CONTENT-TYPE are as for `jenkins--http'."
   (tabulated-list-print t))
 
 (defun jenkins-toggle-running-filter ()
-  "Toggle between showing all jobs vs only running jobs."
+  "Toggle between showing all jobs vs only running jobs.
+Folders are always shown so that they can still be opened."
   (interactive)
   (setq jenkins--filter-running-only (not jenkins--filter-running-only))
   (message (if jenkins--filter-running-only
@@ -293,23 +362,57 @@ METHOD, URL-STR, POST-DATA and CONTENT-TYPE are as for `jenkins--http'."
   (jenkins-refresh))
 
 (defun jenkins-current-job ()
-  "Get the job name at point."
-  (tabulated-list-get-id))
+  "Get the job name at point, or nil."
+  (let ((id (tabulated-list-get-id)))
+    (when (consp id) (car id))))
 
-(defun jenkins-trigger-job (job-name)
-  "Interactively trigger JOB-NAME, prompting for parameters if defined."
-  (interactive
-   (list (or (jenkins-current-job)
-             (completing-read "Trigger Job: "
-                              (delq nil
-                                    (mapcar (lambda (j)
-                                              (and (hash-table-p j)
-                                                   (jenkins--get "name" j)))
-                                            (jenkins--fetch-jobs)))))))
-  (unless job-name
-    (user-error "No job selected"))
-  (let* ((url (format "%s/job/%s/api/json" (jenkins-base-url) job-name))
-         (info (jenkins--request "GET" url))
+(defun jenkins--job-names ()
+  "Return full paths of the non-folder jobs in the current folder."
+  (delq nil
+        (mapcar (lambda (j)
+                  (and (hash-table-p j)
+                       (not (jenkins--folder-p j))
+                       (let ((name (jenkins--get "name" j)))
+                         (and name (jenkins--join-path jenkins--folder name)))))
+                (jenkins--fetch-jobs jenkins--folder))))
+
+(defun jenkins--read-job (prompt)
+  "Return the full path of the job at point, or ask for one using PROMPT.
+Signal a `user-error' when point is on a folder."
+  (let ((id (and (derived-mode-p 'jenkins-mode) (tabulated-list-get-id))))
+    (cond
+     ((and (consp id) (cdr id))
+      (user-error "'%s' is a folder; press RET to open it" (car id)))
+     ((consp id)
+      (jenkins--join-path jenkins--folder (car id)))
+     (t
+      (let ((job (completing-read prompt (jenkins--job-names))))
+        (if (string-empty-p job) (user-error "No job selected") job))))))
+
+(defun jenkins-open-folder (folder)
+  "Open a jobs buffer listing the jobs in FOLDER (a slash-separated path)."
+  (let ((buf (get-buffer-create (format "*Jenkins: %s*" folder))))
+    (with-current-buffer buf
+      (jenkins-mode)
+      (setq jenkins--folder folder)
+      (jenkins-refresh))
+    (pop-to-buffer-same-window buf)))
+
+(defun jenkins-enter ()
+  "Open the folder at point, or the build history of the job at point."
+  (interactive)
+  (let ((id (tabulated-list-get-id)))
+    (unless (consp id)
+      (user-error "No job selected"))
+    (if (cdr id)
+        (jenkins-open-folder (jenkins--join-path jenkins--folder (car id)))
+      (jenkins-view-build-history (jenkins--join-path jenkins--folder (car id))))))
+
+(defun jenkins-trigger-job (job)
+  "Interactively trigger JOB, prompting for parameters if defined.
+JOB is a slash-separated path such as \"folder/job\"."
+  (interactive (list (jenkins--read-job "Trigger Job: ")))
+  (let* ((info (jenkins--request "GET" (jenkins--job-url job "/api/json")))
          (props (when (hash-table-p info) (jenkins--get "property" info)))
          (props-list (if (listp props) props nil))
          (param-def-prop (cl-find-if (lambda (p)
@@ -320,9 +423,9 @@ METHOD, URL-STR, POST-DATA and CONTENT-TYPE are as for `jenkins--http'."
          (defs-list (if (listp param-defs) param-defs nil)))
     (if (null defs-list)
         ;; Simple non-parameterized trigger
-        (let ((build-url (format "%s/job/%s/build" (jenkins-base-url) job-name)))
-          (jenkins--request "POST" build-url)
-          (message "Triggered '%s'" job-name))
+        (progn
+          (jenkins--request "POST" (jenkins--job-url job "/build"))
+          (message "Triggered '%s'" job))
       ;; Parameterized trigger
       (let (query-params)
         (dolist (p defs-list)
@@ -341,18 +444,19 @@ METHOD, URL-STR, POST-DATA and CONTENT-TYPE are as for `jenkins--http'."
               (when p-name
                 (push (format "%s=%s" (url-hexify-string p-name) (url-hexify-string (or val "")))
                       query-params)))))
-        (let ((build-url (format "%s/job/%s/buildWithParameters?%s"
-                                 (jenkins-base-url) job-name (string-join (nreverse query-params) "&"))))
-          (jenkins--request "POST" build-url)
-          (message "Triggered '%s' with parameters." job-name))))
+        (jenkins--request
+         "POST"
+         (jenkins--job-url job (format "/buildWithParameters?%s"
+                                       (string-join (nreverse query-params) "&"))))
+        (message "Triggered '%s' with parameters." job)))
     (run-at-time 2 nil #'jenkins-refresh)))
 
-(defun jenkins-view-console (job-name &optional build-number)
-  "View the console log for BUILD-NUMBER (default \"lastBuild\") of JOB-NAME."
-  (interactive (list (or (jenkins-current-job) (user-error "No job selected"))))
+(defun jenkins-view-console (job &optional build-number)
+  "View the console log for BUILD-NUMBER (default \"lastBuild\") of JOB."
+  (interactive (list (jenkins--read-job "Console for job: ")))
   (let* ((build-id (or (and build-number (format "%s" build-number)) "lastBuild"))
-         (url (format "%s/job/%s/%s/consoleText" (jenkins-base-url) job-name build-id))
-         (buf (get-buffer-create (format "*Jenkins-Console: %s #%s*" job-name build-id)))
+         (url (jenkins--job-url job (format "/%s/consoleText" build-id)))
+         (buf (get-buffer-create (format "*Jenkins-Console: %s #%s*" job build-id)))
          (output (jenkins--request "GET" url)))
     (with-current-buffer buf
       (read-only-mode -1)
@@ -362,40 +466,33 @@ METHOD, URL-STR, POST-DATA and CONTENT-TYPE are as for `jenkins--http'."
       (special-mode))
     (pop-to-buffer buf)))
 
-(defun jenkins-abort-build (job-name)
-  "Abort the running build for JOB-NAME."
-  (interactive (list (or (jenkins-current-job) (user-error "No job selected"))))
-  (when (yes-or-no-p (format "Abort active build for %s? " job-name))
-    (let ((url (format "%s/job/%s/lastBuild/stop" (jenkins-base-url) job-name)))
-      (jenkins--request "POST" url)
-      (message "Requested abort for %s" job-name)
-      (run-at-time 2 nil #'jenkins-refresh))))
+(defun jenkins-abort-build (job)
+  "Abort the running build for JOB."
+  (interactive (list (jenkins--read-job "Abort job: ")))
+  (when (yes-or-no-p (format "Abort active build for %s? " job))
+    (jenkins--request "POST" (jenkins--job-url job "/lastBuild/stop"))
+    (message "Requested abort for %s" job)
+    (run-at-time 2 nil #'jenkins-refresh)))
 
-(defun jenkins-open-in-browser (job-name)
-  "Open JOB-NAME in external web browser."
-  (interactive (list (or (jenkins-current-job) (user-error "No job selected"))))
-  (browse-url (format "%s/job/%s" (jenkins-base-url) job-name)))
+(defun jenkins-open-in-browser (job)
+  "Open JOB in external web browser."
+  (interactive (list (jenkins--read-job "Open job: ")))
+  (browse-url (jenkins--job-url job)))
 
 ;;; --- Build History Mode ---
 
-(defvar-local jenkins--history-job-name nil
-  "The job name for the current build history buffer.")
-
-(defun jenkins--fetch-build-history (job-name)
-  "Fetch builds list for JOB-NAME."
+(defun jenkins--fetch-build-history (job)
+  "Fetch builds list for JOB."
   (let* ((tree "builds[number,result,building,duration,timestamp,displayName,description]")
-         (url (format "%s/job/%s/api/json?tree=%s"
-                      (jenkins-base-url)
-                      (url-hexify-string job-name)
-                      (url-hexify-string tree)))
-         (resp (jenkins--request "GET" url)))
-    (if (hash-table-p resp)
-        (jenkins--get "builds" resp)
-      nil)))
+         (resp (jenkins--request
+                "GET" (jenkins--job-url job (format "/api/json?tree=%s"
+                                                    (url-hexify-string tree))))))
+    (when (hash-table-p resp)
+      (jenkins--get "builds" resp))))
 
-(defun jenkins--history-entries (job-name)
-  "Generate tabulated list entries for build history of JOB-NAME."
-  (let ((builds (jenkins--fetch-build-history job-name))
+(defun jenkins--history-entries (job)
+  "Generate tabulated list entries for build history of JOB."
+  (let ((builds (jenkins--fetch-build-history job))
         entries)
     (dolist (b (if (listp builds) builds nil))
       (when (hash-table-p b)
@@ -417,8 +514,8 @@ METHOD, URL-STR, POST-DATA and CONTENT-TYPE are as for `jenkins--http'."
 (defun jenkins-history-refresh ()
   "Refresh the current build history buffer."
   (interactive)
-  (when jenkins--history-job-name
-    (setq tabulated-list-entries (jenkins--history-entries jenkins--history-job-name))
+  (when jenkins--history-job
+    (setq tabulated-list-entries (jenkins--history-entries jenkins--history-job))
     (tabulated-list-print t)))
 
 (defun jenkins-current-build-number ()
@@ -428,41 +525,34 @@ METHOD, URL-STR, POST-DATA and CONTENT-TYPE are as for `jenkins--http'."
 (defun jenkins-history-view-console (&optional build-num)
   "View console output for BUILD-NUM of the current job."
   (interactive (list (or (jenkins-current-build-number) (user-error "No build selected"))))
-  (unless (and jenkins--history-job-name build-num)
+  (unless (and jenkins--history-job build-num)
     (user-error "Cannot view console: missing job or build number"))
-  (jenkins-view-console jenkins--history-job-name build-num))
+  (jenkins-view-console jenkins--history-job build-num))
 
 (defun jenkins-history-abort-build (&optional build-num)
   "Abort BUILD-NUM for the current job."
   (interactive (list (or (jenkins-current-build-number) (user-error "No build selected"))))
-  (unless (and jenkins--history-job-name build-num)
+  (unless (and jenkins--history-job build-num)
     (user-error "Cannot abort: missing job or build number"))
-  (when (yes-or-no-p (format "Abort %s #%s? " jenkins--history-job-name build-num))
-    (let ((url (format "%s/job/%s/%s/stop" (jenkins-base-url) jenkins--history-job-name build-num)))
-      (jenkins--request "POST" url)
-      (message "Requested abort for %s #%s" jenkins--history-job-name build-num)
-      (run-at-time 2 nil #'jenkins-history-refresh))))
+  (when (yes-or-no-p (format "Abort %s #%s? " jenkins--history-job build-num))
+    (jenkins--request "POST" (jenkins--job-url jenkins--history-job (format "/%s/stop" build-num)))
+    (message "Requested abort for %s #%s" jenkins--history-job build-num)
+    (run-at-time 2 nil #'jenkins-history-refresh)))
 
 (defun jenkins-history-open-in-browser (&optional build-num)
   "Open BUILD-NUM in external browser."
   (interactive (list (or (jenkins-current-build-number) (user-error "No build selected"))))
-  (browse-url (format "%s/job/%s/%s" (jenkins-base-url) jenkins--history-job-name (or build-num ""))))
+  (browse-url (jenkins--job-url jenkins--history-job (format "/%s" (or build-num "")))))
 
-(defun jenkins-view-build-history (&optional job-name)
-  "View the build history for JOB-NAME."
-  (interactive (list (or (jenkins-current-job)
-                         (completing-read "Job: "
-                                          (delq nil
-                                                (mapcar (lambda (j)
-                                                          (and (hash-table-p j)
-                                                               (jenkins--get "name" j)))
-                                                        (jenkins--fetch-jobs)))))))
-  (unless job-name
+(defun jenkins-view-build-history (&optional job)
+  "View the build history for JOB (a slash-separated path)."
+  (interactive (list (jenkins--read-job "Job: ")))
+  (unless job
     (user-error "No job selected"))
-  (let ((buf (get-buffer-create (format "*Jenkins-History: %s*" job-name))))
+  (let ((buf (get-buffer-create (format "*Jenkins-History: %s*" job))))
     (with-current-buffer buf
       (jenkins-build-history-mode)
-      (setq jenkins--history-job-name job-name)
+      (setq jenkins--history-job job)
       (jenkins-history-refresh))
     (pop-to-buffer buf)))
 
@@ -499,9 +589,9 @@ METHOD, URL-STR, POST-DATA and CONTENT-TYPE are as for `jenkins--http'."
 (set-keymap-parent jenkins-mode-map tabulated-list-mode-map)
 (define-key jenkins-mode-map (kbd "g")   #'jenkins-refresh)
 (define-key jenkins-mode-map (kbd "b")   #'jenkins-trigger-job)
-(define-key jenkins-mode-map (kbd "RET") #'jenkins-view-build-history)
-(define-key jenkins-mode-map [return]    #'jenkins-view-build-history)
-(define-key jenkins-mode-map (kbd "C-m") #'jenkins-view-build-history)
+(define-key jenkins-mode-map (kbd "RET") #'jenkins-enter)
+(define-key jenkins-mode-map [return]    #'jenkins-enter)
+(define-key jenkins-mode-map (kbd "C-m") #'jenkins-enter)
 (define-key jenkins-mode-map (kbd "h")   #'jenkins-view-build-history)
 (define-key jenkins-mode-map (kbd "c")   #'jenkins-view-console)
 (define-key jenkins-mode-map (kbd "k")   #'jenkins-abort-build)
