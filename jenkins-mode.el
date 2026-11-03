@@ -45,6 +45,7 @@
 ;;; Code:
 
 (require 'tabulated-list)
+(require 'hl-line)
 (require 'json)
 (require 'url)
 (require 'url-http)
@@ -590,6 +591,7 @@ JOB is a slash-separated path such as \"folder/job\"."
   (setq tabulated-list-padding 2)
   (setq tabulated-list-sort-key (cons "Build" t))
   (add-hook 'tabulated-list-revert-hook #'jenkins-history-refresh nil t)
+  (hl-line-mode 1)
   (tabulated-list-init-header))
 
 (defvar jenkins-mode-map (make-sparse-keymap)
@@ -619,6 +621,7 @@ JOB is a slash-separated path such as \"folder/job\"."
   (setq tabulated-list-padding 2)
   (setq tabulated-list-sort-key (cons "Job Name" nil))
   (add-hook 'tabulated-list-revert-hook #'jenkins-refresh nil t)
+  (hl-line-mode 1)
   (tabulated-list-init-header))
 
 ;;;###autoload
