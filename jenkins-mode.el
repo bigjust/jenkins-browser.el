@@ -86,9 +86,12 @@ the top-level buffer, not to folders opened from it."
   :type '(choice (const :tag "No view" nil) string)
   :group 'jenkins)
 
-(defcustom jenkins-auto-refresh-interval 15
-  "Auto-refresh interval in seconds when in `jenkins-mode`.
-Set to 0 or nil to disable auto-refresh."
+(defcustom jenkins-auto-refresh-interval nil
+  "Auto-refresh interval in seconds for visible Jenkins buffers.
+Set to nil or 0 to disable auto-refresh.  Requests are synchronous, so
+Emacs blocks for the duration of each refresh; keep the interval
+generous on slow servers.  The value is read when a Jenkins buffer is
+created."
   :type '(choice (const :tag "Disabled" nil) integer)
   :group 'jenkins)
 
@@ -309,6 +312,54 @@ METHOD, URL-STR, POST-DATA and CONTENT-TYPE are as for `jenkins--http'."
    (t
     (propertize (or result (and (stringp color) color) "NOT BUILT") 'face 'font-lock-comment-face))))
 
+;;; --- Refresh handling ---
+
+(defun jenkins--refresh-current ()
+  "Refresh the current Jenkins buffer, whichever kind it is."
+  (cond ((derived-mode-p 'jenkins-mode) (jenkins-refresh))
+        ((derived-mode-p 'jenkins-build-history-mode) (jenkins-history-refresh))))
+
+(defun jenkins--refresh-later ()
+  "Refresh the current Jenkins buffer in a couple of seconds."
+  (when (derived-mode-p 'jenkins-mode 'jenkins-build-history-mode)
+    (let ((buf (current-buffer)))
+      (run-at-time 2 nil
+                   (lambda ()
+                     (when (buffer-live-p buf)
+                       (with-current-buffer buf
+                         (jenkins--refresh-current))))))))
+
+(defun jenkins--timer-tick ()
+  "Refresh all visible Jenkins buffers; stop the timer when none are left."
+  (let (found)
+    (dolist (buf (buffer-list))
+      (with-current-buffer buf
+        (when (derived-mode-p 'jenkins-mode 'jenkins-build-history-mode)
+          (setq found t)
+          (when (get-buffer-window buf 'visible)
+            (condition-case err
+                (jenkins--refresh-current)
+              (error (message "jenkins auto-refresh failed: %s"
+                              (error-message-string err))))))))
+    (unless found
+      (jenkins--stop-timer))))
+
+(defun jenkins--stop-timer ()
+  "Cancel the auto-refresh timer."
+  (when (timerp jenkins--refresh-timer)
+    (cancel-timer jenkins--refresh-timer))
+  (setq jenkins--refresh-timer nil))
+
+(defun jenkins--ensure-timer ()
+  "Start the auto-refresh timer if enabled and not already running."
+  (when (and (integerp jenkins-auto-refresh-interval)
+             (> jenkins-auto-refresh-interval 0)
+             (not (timerp jenkins--refresh-timer)))
+    (setq jenkins--refresh-timer
+          (run-at-time jenkins-auto-refresh-interval
+                       jenkins-auto-refresh-interval
+                       #'jenkins--timer-tick))))
+
 ;;; --- Tabulated List UI for Jobs ---
 
 (defun jenkins--job-entries ()
@@ -450,7 +501,7 @@ JOB is a slash-separated path such as \"folder/job\"."
          (jenkins--job-url job (format "/buildWithParameters?%s"
                                        (string-join (nreverse query-params) "&"))))
         (message "Triggered '%s' with parameters." job)))
-    (run-at-time 2 nil #'jenkins-refresh)))
+    (jenkins--refresh-later)))
 
 (define-derived-mode jenkins-console-mode special-mode "Jenkins-Console"
   "Major mode for viewing a Jenkins console log.
@@ -481,7 +532,7 @@ JOB is a slash-separated path such as \"folder/job\"."
   (when (yes-or-no-p (format "Abort active build for %s? " job))
     (jenkins--request "POST" (jenkins--job-url job "/lastBuild/stop"))
     (message "Requested abort for %s" job)
-    (run-at-time 2 nil #'jenkins-refresh)))
+    (jenkins--refresh-later)))
 
 (defun jenkins-open-in-browser (job)
   "Open JOB in external web browser."
@@ -546,7 +597,7 @@ JOB is a slash-separated path such as \"folder/job\"."
   (when (yes-or-no-p (format "Abort %s #%s? " jenkins--history-job build-num))
     (jenkins--request "POST" (jenkins--job-url jenkins--history-job (format "/%s/stop" build-num)))
     (message "Requested abort for %s #%s" jenkins--history-job build-num)
-    (run-at-time 2 nil #'jenkins-history-refresh)))
+    (jenkins--refresh-later)))
 
 (defun jenkins-history-open-in-browser (&optional build-num)
   "Open BUILD-NUM in external browser."
@@ -592,7 +643,8 @@ JOB is a slash-separated path such as \"folder/job\"."
   (setq tabulated-list-sort-key (cons "Build" t))
   (add-hook 'tabulated-list-revert-hook #'jenkins-history-refresh nil t)
   (hl-line-mode 1)
-  (tabulated-list-init-header))
+  (tabulated-list-init-header)
+  (jenkins--ensure-timer))
 
 (defvar jenkins-mode-map (make-sparse-keymap)
   "Keymap for `jenkins-mode` buffers.")
@@ -622,7 +674,8 @@ JOB is a slash-separated path such as \"folder/job\"."
   (setq tabulated-list-sort-key (cons "Job Name" nil))
   (add-hook 'tabulated-list-revert-hook #'jenkins-refresh nil t)
   (hl-line-mode 1)
-  (tabulated-list-init-header))
+  (tabulated-list-init-header)
+  (jenkins--ensure-timer))
 
 ;;;###autoload
 (defun jenkins ()
