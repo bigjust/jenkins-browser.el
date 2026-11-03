@@ -101,6 +101,11 @@ created."
   :type 'integer
   :group 'jenkins)
 
+(defcustom jenkins-history-limit 50
+  "Maximum number of builds to show in a build history buffer."
+  :type 'integer
+  :group 'jenkins)
+
 (defcustom jenkins-folder-class-regexp "Folder\\|MultiBranchProject"
   "Regexp matching the Jenkins `_class' of jobs that contain other jobs."
   :type 'regexp
@@ -544,7 +549,8 @@ JOB is a slash-separated path such as \"folder/job\"."
 
 (defun jenkins--fetch-build-history (job)
   "Fetch builds list for JOB."
-  (let* ((tree "builds[number,result,building,duration,timestamp,displayName,description]")
+  (let* ((tree (format "builds[number,result,building,duration,timestamp,displayName,description]{0,%d}"
+                       jenkins-history-limit))
          (resp (jenkins--request
                 "GET" (jenkins--job-url job (format "/api/json?tree=%s"
                                                     (url-hexify-string tree))))))
