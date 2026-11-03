@@ -110,7 +110,7 @@ emacs -Q --batch -L . -l test/jenkins-mode-test.el -f ert-run-tests-batch-and-ex
 
 ## License
 
-Copyright (C) 2026 JCaratzas.
+Copyright (C) 2026 Justin Caratzas.
 
 This program is free software: you can redistribute it and/or modify it under
 the terms of the GNU General Public License as published by the Free Software
