@@ -114,14 +114,23 @@ Set to 0 or nil to disable auto-refresh."
 
 ;;; --- API & HTTP Helper ---
 
+(defun jenkins--get (key obj)
+  "Safely retrieve KEY from OBJ if OBJ is a hash-table, else nil.
+Converts `:null` and `:json-false` values to nil."
+  (when (hash-table-p obj)
+    (let ((val (gethash key obj)))
+      (if (memq val '(:null :json-false)) nil val))))
+
 (defun jenkins--fetch-crumb ()
   "Fetch CSRF protection crumb, returns cons of (HEADER . VALUE) or nil."
   (condition-case nil
       (let* ((url (format "%s/crumbIssuer/api/json" (jenkins-base-url)))
              (res (jenkins--request "GET" url)))
         (when (hash-table-p res)
-          (cons (gethash "crumbRequestField" res)
-                (gethash "crumb" res))))
+          (let ((field (jenkins--get "crumbRequestField" res))
+                (crumb (jenkins--get "crumb" res)))
+            (when (and field crumb)
+              (cons field crumb)))))
     (error nil)))
 
 (defun jenkins--request (method url-str &optional post-data content-type)
@@ -143,7 +152,11 @@ Set to 0 or nil to disable auto-refresh."
       (let ((body (buffer-substring-no-properties (point) (point-max))))
         (kill-buffer (current-buffer))
         (condition-case nil
-            (json-parse-string body :object-type 'hash-table :array-type 'list)
+            (json-parse-string body
+                               :object-type 'hash-table
+                               :array-type 'list
+                               :null-object nil
+                               :false-object nil)
           (error body))))))
 
 ;;; --- Core Jenkins Queries ---
@@ -154,12 +167,12 @@ Set to 0 or nil to disable auto-refresh."
          (url (format "%s/api/json?tree=%s" (jenkins-base-url) (url-hexify-string tree)))
          (resp (jenkins--request "GET" url)))
     (if (hash-table-p resp)
-        (gethash "jobs" resp)
+        (jenkins--get "jobs" resp)
       nil)))
 
 (defun jenkins--format-duration (millis)
   "Convert MILLIS to a human-readable duration."
-  (if (or (null millis) (<= millis 0))
+  (if (or (null millis) (not (numberp millis)) (<= millis 0))
       "-"
     (let* ((secs (/ millis 1000))
            (mins (/ secs 60))
@@ -182,10 +195,12 @@ Set to 0 or nil to disable auto-refresh."
     (propertize "FAILURE" 'face '(:foreground "red" :weight bold)))
    ((equal result "ABORTED")
     (propertize "ABORTED" 'face '(:foreground "dim gray")))
-   ((string-prefix-p "anime" (or color ""))
+   ((and (stringp color) (string-prefix-p "anime" color))
+    (propertize "RUNNING" 'face '(:foreground "deep sky blue" :weight bold)))
+   ((and (stringp color) (string-match-p "_anime$" color))
     (propertize "RUNNING" 'face '(:foreground "deep sky blue" :weight bold)))
    (t
-    (propertize (or result color "UNKNOWN") 'face 'font-lock-comment-face))))
+    (propertize (or result (and (stringp color) color) "NOT BUILT") 'face 'font-lock-comment-face))))
 
 ;;; --- Tabulated List UI ---
 
@@ -193,24 +208,26 @@ Set to 0 or nil to disable auto-refresh."
   "Generate tabulated list entries from Jenkins jobs."
   (let ((jobs (jenkins--fetch-jobs))
         entries)
-    (dolist (job jobs)
-      (let* ((name (gethash "name" job))
-             (color (gethash "color" job))
-             (last-build (gethash "lastBuild" job))
-             (num (and last-build (gethash "number" last-build)))
-             (building (and last-build (gethash "building" last-build)))
-             (result (and last-build (gethash "result" last-build)))
-             (duration (and last-build (gethash "duration" last-build)))
-             (status-str (jenkins--format-status color building result)))
-        (when (or (not jenkins--filter-running-only)
-                  building
-                  (string-match-p "_anime$" (or color "")))
-          (push (list name
-                      (vector (propertize name 'face 'font-lock-function-name-face)
-                              status-str
-                              (if num (format "#%d" num) "-")
-                              (jenkins--format-duration duration)))
-                entries))))
+    (dolist (job (if (listp jobs) jobs nil))
+      (when (hash-table-p job)
+        (let* ((name (jenkins--get "name" job))
+               (color (jenkins--get "color" job))
+               (last-build (jenkins--get "lastBuild" job))
+               (num (jenkins--get "number" last-build))
+               (building (jenkins--get "building" last-build))
+               (result (jenkins--get "result" last-build))
+               (duration (jenkins--get "duration" last-build))
+               (status-str (jenkins--format-status color building result)))
+          (when (and name
+                     (or (not jenkins--filter-running-only)
+                         building
+                         (and (stringp color) (string-match-p "_anime$" color))))
+            (push (list name
+                        (vector (propertize name 'face 'font-lock-function-name-face)
+                                status-str
+                                (if num (format "#%s" num) "-")
+                                (jenkins--format-duration duration)))
+                  entries)))))
     (nreverse entries)))
 
 (define-derived-mode jenkins-mode tabulated-list-mode "Jenkins"
@@ -263,35 +280,48 @@ Set to 0 or nil to disable auto-refresh."
   (interactive
    (list (or (jenkins-current-job)
              (completing-read "Trigger Job: "
-                              (mapcar (lambda (j) (gethash "name" j))
-                                      (jenkins--fetch-jobs))))))
+                              (delq nil
+                                    (mapcar (lambda (j)
+                                              (and (hash-table-p j)
+                                                   (jenkins--get "name" j)))
+                                            (jenkins--fetch-jobs)))))))
   (unless job-name
     (user-error "No job selected"))
   (let* ((url (format "%s/job/%s/api/json" (jenkins-base-url) job-name))
          (info (jenkins--request "GET" url))
-         (props (when (hash-table-p info) (gethash "property" info)))
-         (param-def-prop (cl-find-if (lambda (p) (gethash "parameterDefinitions" p)) props))
-         (param-defs (when param-def-prop (gethash "parameterDefinitions" param-def-prop))))
-    (if (null param-defs)
+         (props (when (hash-table-p info) (jenkins--get "property" info)))
+         (props-list (if (listp props) props nil))
+         (param-def-prop (cl-find-if (lambda (p)
+                                       (and (hash-table-p p)
+                                            (jenkins--get "parameterDefinitions" p)))
+                                     props-list))
+         (param-defs (when param-def-prop (jenkins--get "parameterDefinitions" param-def-prop)))
+         (defs-list (if (listp param-defs) param-defs nil)))
+    (if (null defs-list)
         ;; Simple non-parameterized trigger
         (let ((build-url (format "%s/job/%s/build" (jenkins-base-url) job-name)))
           (jenkins--request "POST" build-url)
           (message "Triggered '%s'" job-name))
       ;; Parameterized trigger
       (let (query-params)
-        (dolist (p param-defs)
-          (let* ((p-name (gethash "name" p))
-                 (p-desc (or (gethash "description" p) ""))
-                 (default-obj (gethash "defaultParameterValue" p))
-                 (p-default (when default-obj (format "%s" (gethash "value" default-obj))))
-                 (choices (gethash "choices" p))
-                 (val (if choices
-                          (completing-read (format "%s (%s): " p-name p-desc) choices nil t p-default)
-                        (read-string (format "%s [%s] (%s): " p-name (or p-default "") p-desc)
-                                     nil nil p-default))))
-            (push (format "%s=%s" (url-hexify-string p-name) (url-hexify-string val)) query-params)))
+        (dolist (p defs-list)
+          (when (hash-table-p p)
+            (let* ((p-name (jenkins--get "name" p))
+                   (p-desc (or (jenkins--get "description" p) ""))
+                   (default-obj (jenkins--get "defaultParameterValue" p))
+                   (p-default (when (hash-table-p default-obj)
+                                (let ((val (jenkins--get "value" default-obj)))
+                                  (when val (format "%s" val)))))
+                   (choices (jenkins--get "choices" p))
+                   (val (if (and choices (listp choices))
+                            (completing-read (format "%s (%s): " p-name p-desc) choices nil t p-default)
+                          (read-string (format "%s [%s] (%s): " p-name (or p-default "") p-desc)
+                                       nil nil p-default))))
+              (when p-name
+                (push (format "%s=%s" (url-hexify-string p-name) (url-hexify-string (or val "")))
+                      query-params)))))
         (let ((build-url (format "%s/job/%s/buildWithParameters?%s"
-                                 (jenkins-base-url) job-name (string-join query-params "&"))))
+                                 (jenkins-base-url) job-name (string-join (nreverse query-params) "&"))))
           (jenkins--request "POST" build-url)
           (message "Triggered '%s' with parameters." job-name))))
     (run-at-time 2 nil #'jenkins-refresh)))
