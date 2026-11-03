@@ -451,19 +451,27 @@ JOB is a slash-separated path such as \"folder/job\"."
         (message "Triggered '%s' with parameters." job)))
     (run-at-time 2 nil #'jenkins-refresh)))
 
+(define-derived-mode jenkins-console-mode special-mode "Jenkins-Console"
+  "Major mode for viewing a Jenkins console log.
+
+\\{jenkins-console-mode-map}")
+
+(defun jenkins--console-text (text)
+  "Strip CR characters from console TEXT."
+  (replace-regexp-in-string "\r" "" text))
+
 (defun jenkins-view-console (job &optional build-number)
   "View the console log for BUILD-NUMBER (default \"lastBuild\") of JOB."
   (interactive (list (jenkins--read-job "Console for job: ")))
   (let* ((build-id (or (and build-number (format "%s" build-number)) "lastBuild"))
-         (url (jenkins--job-url job (format "/%s/consoleText" build-id)))
-         (buf (get-buffer-create (format "*Jenkins-Console: %s #%s*" job build-id)))
-         (output (jenkins--request "GET" url)))
+         (output (jenkins--http "GET" (jenkins--job-url job (format "/%s/consoleText" build-id))))
+         (buf (get-buffer-create (format "*Jenkins-Console: %s #%s*" job build-id))))
     (with-current-buffer buf
-      (read-only-mode -1)
-      (erase-buffer)
-      (insert (if (stringp output) output (format "%s" output)))
-      (goto-char (point-max))
-      (special-mode))
+      (jenkins-console-mode)
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert (jenkins--console-text output)))
+      (goto-char (point-max)))
     (pop-to-buffer buf)))
 
 (defun jenkins-abort-build (job)
