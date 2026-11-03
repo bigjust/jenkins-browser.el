@@ -4,8 +4,8 @@
 
 ;; Author: JCaratzas
 ;; Keywords: tools, jenkins, ci
-;; Version: 0.1.0
-;; Package-Requires: ((emacs "27.1") (cl-lib "0.5"))
+;; Version: 0.2.0
+;; Package-Requires: ((emacs "27.1"))
 
 ;; This file is not part of GNU Emacs.
 
@@ -65,7 +65,7 @@ If nil, attempts to read from `~/.jenkins_jobs.ini`."
   :group 'jenkins)
 
 (defcustom jenkins-username nil
-  "Jenkins username. If nil, attempts to read from `~/.jenkins_jobs.ini`."
+  "Jenkins username.  If nil, attempts to read from `~/.jenkins_jobs.ini`."
   :type '(choice (const :tag "Auto from ini" nil) string)
   :group 'jenkins)
 
@@ -319,7 +319,9 @@ decoded and whitespace collapsed.  Return \"-\" when there is nothing to show."
     (if names (string-join names ", ") "-")))
 
 (defun jenkins--format-status (color building result)
-  "Format build status with text properties."
+  "Format build status with text properties.
+COLOR is the Jenkins job color, BUILDING non-nil if running, RESULT the
+build result string."
   (cond
    (building
     (propertize "RUNNING" 'face '(:foreground "deep sky blue" :weight bold)))
