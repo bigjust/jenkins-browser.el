@@ -429,19 +429,22 @@ Converts `:null` and `:json-false` values to nil."
 
 ;;; --- Mode Definitions and Keymaps ---
 
-(defvar-keymap jenkins-build-history-mode-map
-  :doc "Keymap for `jenkins-build-history-mode` buffers."
-  :parent tabulated-list-mode-map
-  "g"   #'jenkins-history-refresh
-  "RET" #'jenkins-history-view-console
-  "c"   #'jenkins-history-view-console
-  "k"   #'jenkins-history-abort-build
-  "o"   #'jenkins-history-open-in-browser)
+(defvar jenkins-build-history-mode-map (make-sparse-keymap)
+  "Keymap for `jenkins-build-history-mode` buffers.")
+(set-keymap-parent jenkins-build-history-mode-map tabulated-list-mode-map)
+(define-key jenkins-build-history-mode-map (kbd "g")   #'jenkins-history-refresh)
+(define-key jenkins-build-history-mode-map (kbd "RET") #'jenkins-history-view-console)
+(define-key jenkins-build-history-mode-map [return]    #'jenkins-history-view-console)
+(define-key jenkins-build-history-mode-map (kbd "C-m") #'jenkins-history-view-console)
+(define-key jenkins-build-history-mode-map (kbd "c")   #'jenkins-history-view-console)
+(define-key jenkins-build-history-mode-map (kbd "k")   #'jenkins-history-abort-build)
+(define-key jenkins-build-history-mode-map (kbd "o")   #'jenkins-history-open-in-browser)
 
 (define-derived-mode jenkins-build-history-mode tabulated-list-mode "Jenkins-History"
   "Major mode for browsing Jenkins build history.
 
 \\{jenkins-build-history-mode-map}"
+  :keymap jenkins-build-history-mode-map
   (setq tabulated-list-format
         [("Build"     10 t)
          ("Status"    12 t)
@@ -452,22 +455,25 @@ Converts `:null` and `:json-false` values to nil."
   (add-hook 'tabulated-list-revert-hook #'jenkins-history-refresh nil t)
   (tabulated-list-init-header))
 
-(defvar-keymap jenkins-mode-map
-  :doc "Keymap for `jenkins-mode` buffers."
-  :parent tabulated-list-mode-map
-  "g"   #'jenkins-refresh
-  "b"   #'jenkins-trigger-job
-  "RET" #'jenkins-view-build-history
-  "h"   #'jenkins-view-build-history
-  "c"   #'jenkins-view-console
-  "k"   #'jenkins-abort-build
-  "f"   #'jenkins-toggle-running-filter
-  "o"   #'jenkins-open-in-browser)
+(defvar jenkins-mode-map (make-sparse-keymap)
+  "Keymap for `jenkins-mode` buffers.")
+(set-keymap-parent jenkins-mode-map tabulated-list-mode-map)
+(define-key jenkins-mode-map (kbd "g")   #'jenkins-refresh)
+(define-key jenkins-mode-map (kbd "b")   #'jenkins-trigger-job)
+(define-key jenkins-mode-map (kbd "RET") #'jenkins-view-build-history)
+(define-key jenkins-mode-map [return]    #'jenkins-view-build-history)
+(define-key jenkins-mode-map (kbd "C-m") #'jenkins-view-build-history)
+(define-key jenkins-mode-map (kbd "h")   #'jenkins-view-build-history)
+(define-key jenkins-mode-map (kbd "c")   #'jenkins-view-console)
+(define-key jenkins-mode-map (kbd "k")   #'jenkins-abort-build)
+(define-key jenkins-mode-map (kbd "f")   #'jenkins-toggle-running-filter)
+(define-key jenkins-mode-map (kbd "o")   #'jenkins-open-in-browser)
 
 (define-derived-mode jenkins-mode tabulated-list-mode "Jenkins"
   "Major mode for browsing and triggering Jenkins jobs.
 
 \\{jenkins-mode-map}"
+  :keymap jenkins-mode-map
   (setq tabulated-list-format
         [("Job Name" 40 t)
          ("Status"   12 t)
@@ -487,6 +493,17 @@ Converts `:null` and `:json-false` values to nil."
       (jenkins-mode)
       (jenkins-refresh))
     (pop-to-buffer buf)))
+
+;;;###autoload
+(defun jenkins-reload ()
+  "Force reload `jenkins-mode` and re-initialize any open Jenkins buffers."
+  (interactive)
+  (load-file (expand-file-name "~/code/jenkins-mode.el/jenkins-mode.el"))
+  (when (get-buffer "*Jenkins*")
+    (with-current-buffer "*Jenkins*"
+      (jenkins-mode)
+      (jenkins-refresh)))
+  (message "jenkins-mode reloaded."))
 
 (provide 'jenkins-mode)
 ;;; jenkins-mode.el ends here
