@@ -1,0 +1,343 @@
+;;; jenkins-mode.el --- Interactive Jenkins job viewer and trigger -*- lexical-binding: t; -*-
+
+;; Author: JCaratzas
+;; Keywords: tools, jenkins, ci
+;; Version: 0.1.0
+;; Package-Requires: ((emacs "27.1") (cl-lib "0.5"))
+
+;;; Commentary:
+;; An interactive major mode to list jobs, filter running builds, trigger
+;; parameterized and non-parameterized jobs, view live/latest console logs,
+;; and abort builds.
+;;
+;; Credentials and Jenkins URL can be configured via customize options or
+;; automatically loaded from `~/.jenkins_jobs.ini`.
+
+;;; Code:
+
+(require 'tabulated-list)
+(require 'json)
+(require 'url)
+(require 'url-http)
+(require 'auth-source)
+(require 'subr-x)
+(require 'cl-lib)
+
+(defgroup jenkins nil
+  "Interact with Jenkins from Emacs."
+  :group 'tools
+  :prefix "jenkins-")
+
+(defcustom jenkins-url nil
+  "Base URL for Jenkins (e.g., https://jenkins.example.com).
+If nil, attempts to read from `~/.jenkins_jobs.ini`."
+  :type '(choice (const :tag "Auto from ini" nil) string)
+  :group 'jenkins)
+
+(defcustom jenkins-username nil
+  "Jenkins username. If nil, attempts to read from `~/.jenkins_jobs.ini`."
+  :type '(choice (const :tag "Auto from ini" nil) string)
+  :group 'jenkins)
+
+(defcustom jenkins-api-token nil
+  "Jenkins API token or password.
+If nil, attempts to read from `~/.jenkins_jobs.ini`."
+  :type '(choice (const :tag "Auto from ini" nil) string)
+  :group 'jenkins)
+
+(defcustom jenkins-ini-path (expand-file-name "~/.jenkins_jobs.ini")
+  "Path to jenkins_jobs.ini configuration file."
+  :type 'file
+  :group 'jenkins)
+
+(defcustom jenkins-auto-refresh-interval 15
+  "Auto-refresh interval in seconds when in `jenkins-mode`.
+Set to 0 or nil to disable auto-refresh."
+  :type '(choice (const :tag "Disabled" nil) integer)
+  :group 'jenkins)
+
+(defvar-local jenkins--filter-running-only nil
+  "Non-nil if only running builds are displayed.")
+
+(defvar jenkins--refresh-timer nil
+  "Timer object for periodic refresh.")
+
+;;; --- Configuration & Credentials ---
+
+(defun jenkins--parse-ini-file (path)
+  "Parse [jenkins] section from PATH and return an alist."
+  (when (file-readable-p path)
+    (with-temp-buffer
+      (insert-file-contents path)
+      (goto-char (point-min))
+      (let (result in-jenkins-section)
+        (while (not (eobp))
+          (let ((line (string-trim (buffer-substring-no-properties
+                                    (line-beginning-position)
+                                    (line-end-position)))))
+            (cond
+             ((string-match-p "^\\[jenkins\\]" line)
+              (setq in-jenkins-section t))
+             ((string-match-p "^\\[" line)
+              (setq in-jenkins-section nil))
+             ((and in-jenkins-section (string-match "^\\([^=]+\\)=\\(.*\\)$" line))
+              (push (cons (string-trim (match-string 1 line))
+                          (string-trim (match-string 2 line)))
+                    result))))
+          (forward-line 1))
+        result))))
+
+(defun jenkins--get-config (key)
+  "Retrieve KEY (\"url\", \"user\", or \"password\") from custom vars or INI file."
+  (let ((custom-val (pcase key
+                      ("url" jenkins-url)
+                      ("user" jenkins-username)
+                      ("password" jenkins-api-token))))
+    (if (and custom-val (not (string-empty-p custom-val)))
+        custom-val
+      (let ((ini (jenkins--parse-ini-file jenkins-ini-path)))
+        (cdr (assoc key ini))))))
+
+(defun jenkins-base-url ()
+  "Get sanitized Jenkins base URL without trailing slash."
+  (let ((url (jenkins--get-config "url")))
+    (unless url
+      (error "Jenkins URL not configured. Set `jenkins-url` or configure %s" jenkins-ini-path))
+    (directory-file-name url)))
+
+(defun jenkins--auth-header ()
+  "Construct HTTP Basic Auth header."
+  (let ((user (jenkins--get-config "user"))
+        (pass (jenkins--get-config "password")))
+    (when (and user pass)
+      (format "Basic %s" (base64-encode-string (format "%s:%s" user pass) t)))))
+
+;;; --- API & HTTP Helper ---
+
+(defun jenkins--fetch-crumb ()
+  "Fetch CSRF protection crumb, returns cons of (HEADER . VALUE) or nil."
+  (condition-case nil
+      (let* ((url (format "%s/crumbIssuer/api/json" (jenkins-base-url)))
+             (res (jenkins--request "GET" url)))
+        (when (hash-table-p res)
+          (cons (gethash "crumbRequestField" res)
+                (gethash "crumb" res))))
+    (error nil)))
+
+(defun jenkins--request (method url-str &optional post-data content-type)
+  "Synchronous HTTP request returning parsed JSON or raw string."
+  (let ((url-request-method method)
+        (url-request-extra-headers
+         (delq nil
+               (list (cons "Authorization" (jenkins--auth-header))
+                     (when content-type (cons "Content-Type" content-type)))))
+        (url-request-data post-data))
+    (when (member method '("POST" "PUT" "DELETE"))
+      (let ((crumb (jenkins--fetch-crumb)))
+        (when crumb
+          (push crumb url-request-extra-headers))))
+    (with-current-buffer (url-retrieve-synchronously url-str t t)
+      (goto-char (point-min))
+      (re-search-forward "^$" nil t)
+      (forward-char 1)
+      (let ((body (buffer-substring-no-properties (point) (point-max))))
+        (kill-buffer (current-buffer))
+        (condition-case nil
+            (json-parse-string body :object-type 'hash-table :array-type 'list)
+          (error body))))))
+
+;;; --- Core Jenkins Queries ---
+
+(defun jenkins--fetch-jobs ()
+  "Fetch all jobs and their last build metadata."
+  (let* ((tree "jobs[name,color,lastBuild[number,building,result,duration,timestamp,estimatedDuration]]")
+         (url (format "%s/api/json?tree=%s" (jenkins-base-url) (url-hexify-string tree)))
+         (resp (jenkins--request "GET" url)))
+    (if (hash-table-p resp)
+        (gethash "jobs" resp)
+      nil)))
+
+(defun jenkins--format-duration (millis)
+  "Convert MILLIS to a human-readable duration."
+  (if (or (null millis) (<= millis 0))
+      "-"
+    (let* ((secs (/ millis 1000))
+           (mins (/ secs 60))
+           (hours (/ mins 60)))
+      (cond
+       ((> hours 0) (format "%dh %02dm" hours (% mins 60)))
+       ((> mins 0)  (format "%dm %02ds" mins (% secs 60)))
+       (t           (format "%ds" secs))))))
+
+(defun jenkins--format-status (color building result)
+  "Format build status with text properties."
+  (cond
+   (building
+    (propertize "RUNNING" 'face '(:foreground "deep sky blue" :weight bold)))
+   ((equal result "SUCCESS")
+    (propertize "SUCCESS" 'face '(:foreground "forest green" :weight bold)))
+   ((equal result "UNSTABLE")
+    (propertize "UNSTABLE" 'face '(:foreground "gold" :weight bold)))
+   ((equal result "FAILURE")
+    (propertize "FAILURE" 'face '(:foreground "red" :weight bold)))
+   ((equal result "ABORTED")
+    (propertize "ABORTED" 'face '(:foreground "dim gray")))
+   ((string-prefix-p "anime" (or color ""))
+    (propertize "RUNNING" 'face '(:foreground "deep sky blue" :weight bold)))
+   (t
+    (propertize (or result color "UNKNOWN") 'face 'font-lock-comment-face))))
+
+;;; --- Tabulated List UI ---
+
+(defun jenkins--job-entries ()
+  "Generate tabulated list entries from Jenkins jobs."
+  (let ((jobs (jenkins--fetch-jobs))
+        entries)
+    (dolist (job jobs)
+      (let* ((name (gethash "name" job))
+             (color (gethash "color" job))
+             (last-build (gethash "lastBuild" job))
+             (num (and last-build (gethash "number" last-build)))
+             (building (and last-build (gethash "building" last-build)))
+             (result (and last-build (gethash "result" last-build)))
+             (duration (and last-build (gethash "duration" last-build)))
+             (status-str (jenkins--format-status color building result)))
+        (when (or (not jenkins--filter-running-only)
+                  building
+                  (string-match-p "_anime$" (or color "")))
+          (push (list name
+                      (vector (propertize name 'face 'font-lock-function-name-face)
+                              status-str
+                              (if num (format "#%d" num) "-")
+                              (jenkins--format-duration duration)))
+                entries))))
+    (nreverse entries)))
+
+(define-derived-mode jenkins-mode tabulated-list-mode "Jenkins"
+  "Major mode for browsing and triggering Jenkins jobs.
+
+\\{jenkins-mode-map}"
+  (setq tabulated-list-format
+        [("Job Name" 40 t)
+         ("Status"   12 t)
+         ("Last #"   8  nil)
+         ("Duration" 12 nil)])
+  (setq tabulated-list-padding 2)
+  (setq tabulated-list-sort-key (cons "Job Name" nil))
+  (add-hook 'tabulated-list-revert-hook #'jenkins-refresh nil t)
+  (tabulated-list-init-header))
+
+;;; --- Interactive Commands ---
+
+;;;###autoload
+(defun jenkins ()
+  "Open the Jenkins jobs overview buffer."
+  (interactive)
+  (let ((buf (get-buffer-create "*Jenkins*")))
+    (with-current-buffer buf
+      (jenkins-mode)
+      (jenkins-refresh))
+    (pop-to-buffer buf)))
+
+(defun jenkins-refresh ()
+  "Refresh the Jenkins jobs list."
+  (interactive)
+  (setq tabulated-list-entries (jenkins--job-entries))
+  (tabulated-list-print t))
+
+(defun jenkins-toggle-running-filter ()
+  "Toggle between showing all jobs vs only running jobs."
+  (interactive)
+  (setq jenkins--filter-running-only (not jenkins--filter-running-only))
+  (message (if jenkins--filter-running-only
+               "Showing RUNNING jobs only"
+             "Showing ALL jobs"))
+  (jenkins-refresh))
+
+(defun jenkins-current-job ()
+  "Get the job name at point."
+  (tabulated-list-get-id))
+
+(defun jenkins-trigger-job (job-name)
+  "Interactively trigger JOB-NAME, prompting for parameters if defined."
+  (interactive
+   (list (or (jenkins-current-job)
+             (completing-read "Trigger Job: "
+                              (mapcar (lambda (j) (gethash "name" j))
+                                      (jenkins--fetch-jobs))))))
+  (unless job-name
+    (user-error "No job selected"))
+  (let* ((url (format "%s/job/%s/api/json" (jenkins-base-url) job-name))
+         (info (jenkins--request "GET" url))
+         (props (when (hash-table-p info) (gethash "property" info)))
+         (param-def-prop (cl-find-if (lambda (p) (gethash "parameterDefinitions" p)) props))
+         (param-defs (when param-def-prop (gethash "parameterDefinitions" param-def-prop))))
+    (if (null param-defs)
+        ;; Simple non-parameterized trigger
+        (let ((build-url (format "%s/job/%s/build" (jenkins-base-url) job-name)))
+          (jenkins--request "POST" build-url)
+          (message "Triggered '%s'" job-name))
+      ;; Parameterized trigger
+      (let (query-params)
+        (dolist (p param-defs)
+          (let* ((p-name (gethash "name" p))
+                 (p-desc (or (gethash "description" p) ""))
+                 (default-obj (gethash "defaultParameterValue" p))
+                 (p-default (when default-obj (format "%s" (gethash "value" default-obj))))
+                 (choices (gethash "choices" p))
+                 (val (if choices
+                          (completing-read (format "%s (%s): " p-name p-desc) choices nil t p-default)
+                        (read-string (format "%s [%s] (%s): " p-name (or p-default "") p-desc)
+                                     nil nil p-default))))
+            (push (format "%s=%s" (url-hexify-string p-name) (url-hexify-string val)) query-params)))
+        (let ((build-url (format "%s/job/%s/buildWithParameters?%s"
+                                 (jenkins-base-url) job-name (string-join query-params "&"))))
+          (jenkins--request "POST" build-url)
+          (message "Triggered '%s' with parameters." job-name))))
+    (run-at-time 2 nil #'jenkins-refresh)))
+
+(defun jenkins-view-console (job-name)
+  "View the console log for the latest build of JOB-NAME."
+  (interactive (list (or (jenkins-current-job) (user-error "No job selected"))))
+  (let* ((url (format "%s/job/%s/lastBuild/consoleText" (jenkins-base-url) job-name))
+         (buf (get-buffer-create (format "*Jenkins-Console: %s*" job-name)))
+         (output (jenkins--request "GET" url)))
+    (with-current-buffer buf
+      (read-only-mode -1)
+      (erase-buffer)
+      (insert (if (stringp output) output (format "%s" output)))
+      (goto-char (point-max))
+      (special-mode))
+    (pop-to-buffer buf)))
+
+(defun jenkins-abort-build (job-name)
+  "Abort the running build for JOB-NAME."
+  (interactive (list (or (jenkins-current-job) (user-error "No job selected"))))
+  (when (yes-or-no-p (format "Abort active build for %s? " job-name))
+    (let ((url (format "%s/job/%s/lastBuild/stop" (jenkins-base-url) job-name)))
+      (jenkins--request "POST" url)
+      (message "Requested abort for %s" job-name)
+      (run-at-time 2 nil #'jenkins-refresh))))
+
+(defun jenkins-open-in-browser (job-name)
+  "Open JOB-NAME in external web browser."
+  (interactive (list (or (jenkins-current-job) (user-error "No job selected"))))
+  (browse-url (format "%s/job/%s" (jenkins-base-url) job-name)))
+
+;;; --- Keymap ---
+
+(defvar jenkins-mode-map
+  (let ((map (make-sparse-keymap)))
+    (set-keymap-parent map tabulated-list-mode-map)
+    (define-key map (kbd "g")   #'jenkins-refresh)
+    (define-key map (kbd "b")   #'jenkins-trigger-job)          ;; [b]uild / trigger
+    (define-key map (kbd "RET") #'jenkins-view-console)          ;; view console
+    (define-key map (kbd "c")   #'jenkins-view-console)
+    (define-key map (kbd "k")   #'jenkins-abort-build)           ;; [k]ill / abort
+    (define-key map (kbd "f")   #'jenkins-toggle-running-filter) ;; [f]ilter running
+    (define-key map (kbd "o")   #'jenkins-open-in-browser)       ;; [o]pen in browser
+    map)
+  "Keymap for `jenkins-mode` buffers.")
+
+(provide 'jenkins-mode)
+;;; jenkins-mode.el ends here
