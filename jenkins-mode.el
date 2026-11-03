@@ -298,6 +298,19 @@ METHOD, URL-STR, POST-DATA and CONTENT-TYPE are as for `jenkins--http'."
       "-"
     (format-time-string "%Y-%m-%d %H:%M" (seconds-to-time (/ millis 1000.0)))))
 
+(defun jenkins--format-description (description)
+  "Format build DESCRIPTION as a single line of plain text.
+Jenkins descriptions may contain HTML; tags are removed, common entities
+decoded and whitespace collapsed.  Return \"-\" when there is nothing to show."
+  (let ((text (if (stringp description) description "")))
+    (setq text (replace-regexp-in-string "<br[ \t]*/?>" " " text t))
+    (setq text (replace-regexp-in-string "<[^>]*>" "" text t))
+    (dolist (entity '(("&lt;" . "<") ("&gt;" . ">") ("&quot;" . "\"")
+                      ("&#39;" . "'") ("&nbsp;" . " ") ("&amp;" . "&")))
+      (setq text (replace-regexp-in-string (car entity) (cdr entity) text t t)))
+    (setq text (string-trim (replace-regexp-in-string "[ \t\r\n]+" " " text t t)))
+    (if (string-empty-p text) "-" text)))
+
 (defun jenkins--format-culprits (culprits)
   "Format the list of CULPRITS hash-tables as a comma-separated author string."
   (let ((names (when (listp culprits)
@@ -582,7 +595,8 @@ JOB is a slash-separated path such as \"folder/job\"."
                                 status-str
                                 (jenkins--format-timestamp timestamp)
                                 (jenkins--format-culprits (jenkins--get "culprits" b))
-                                (jenkins--format-duration duration)))
+                                (jenkins--format-duration duration)
+                                (jenkins--format-description (jenkins--get "description" b))))
                   entries)))))
     (nreverse entries)))
 
@@ -654,7 +668,8 @@ JOB is a slash-separated path such as \"folder/job\"."
          ("Status"    12 t)
          ("Timestamp" 18 t)
          ("Author"    24 nil)
-         ("Duration"  12 nil)])
+         ("Duration"  12 nil)
+         ("Description" 0 nil)])
   (setq tabulated-list-padding 2)
   (setq tabulated-list-sort-key (cons "Build" t))
   (add-hook 'tabulated-list-revert-hook #'jenkins-history-refresh nil t)
