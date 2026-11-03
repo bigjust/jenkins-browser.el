@@ -51,6 +51,7 @@
 (require 'url-http)
 (require 'subr-x)
 (require 'cl-lib)
+(require 'find-func)
 
 (defgroup jenkins nil
   "Interact with Jenkins from Emacs."
@@ -689,9 +690,9 @@ JOB is a slash-separated path such as \"folder/job\"."
 
 ;;;###autoload
 (defun jenkins-reload ()
-  "Force reload `jenkins-mode` and re-initialize any open Jenkins buffers."
+  "Force reload `jenkins-mode` and re-initialize the top-level Jenkins buffer."
   (interactive)
-  (load-file (expand-file-name "~/code/jenkins-mode.el/jenkins-mode.el"))
+  (load-file (find-library-name "jenkins-mode"))
   (when (get-buffer "*Jenkins*")
     (with-current-buffer "*Jenkins*"
       (jenkins-mode)
