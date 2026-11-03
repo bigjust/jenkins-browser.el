@@ -36,7 +36,6 @@
 (require 'json)
 (require 'url)
 (require 'url-http)
-(require 'auth-source)
 (require 'subr-x)
 (require 'cl-lib)
 
@@ -71,6 +70,11 @@ If nil, attempts to read from `~/.jenkins_jobs.ini`."
   "Auto-refresh interval in seconds when in `jenkins-mode`.
 Set to 0 or nil to disable auto-refresh."
   :type '(choice (const :tag "Disabled" nil) integer)
+  :group 'jenkins)
+
+(defcustom jenkins-request-timeout 30
+  "Timeout in seconds for each HTTP request to Jenkins."
+  :type 'integer
   :group 'jenkins)
 
 (defvar-local jenkins--filter-running-only nil
@@ -119,7 +123,8 @@ Set to 0 or nil to disable auto-refresh."
   "Get sanitized Jenkins base URL without trailing slash."
   (let ((url (jenkins--get-config "url")))
     (unless url
-      (error "Jenkins URL not configured. Set `jenkins-url` or configure %s" jenkins-ini-path))
+      (error "Jenkins URL not configured.  Set `jenkins-url' or configure %s"
+             jenkins-ini-path))
     (directory-file-name url)))
 
 (defun jenkins--auth-header ()
@@ -138,8 +143,51 @@ Converts `:null` and `:json-false` values to nil."
     (let ((val (gethash key obj)))
       (if (memq val '(:null :json-false)) nil val))))
 
+(defun jenkins--http (method url-str &optional post-data content-type)
+  "Perform a synchronous HTTP request and return the response body string.
+METHOD is the HTTP verb and URL-STR the target.  POST-DATA and CONTENT-TYPE
+are sent with the request when non-nil.  A CSRF crumb is attached to
+state-changing methods.  Signal an error on HTTP status 400 or above."
+  (let* ((auth (jenkins--auth-header))
+         (url-request-method method)
+         (url-request-extra-headers
+          (delq nil
+                (list (when auth (cons "Authorization" auth))
+                      (when content-type (cons "Content-Type" content-type)))))
+         (url-request-data post-data))
+    (when (member method '("POST" "PUT" "DELETE"))
+      (let ((crumb (jenkins--fetch-crumb)))
+        (when crumb
+          (push crumb url-request-extra-headers))))
+    (let ((buf (url-retrieve-synchronously url-str t t jenkins-request-timeout)))
+      (unless buf
+        (error "No response from Jenkins for %s" url-str))
+      (with-current-buffer buf
+        (unwind-protect
+            (let ((status (bound-and-true-p url-http-response-status)))
+              (goto-char (point-min))
+              (re-search-forward "^$" nil t)
+              (forward-char 1)
+              (when (and (integerp status) (>= status 400))
+                (error "Jenkins returned HTTP %d for %s" status url-str))
+              (decode-coding-string
+               (buffer-substring-no-properties (point) (point-max)) 'utf-8))
+          (kill-buffer buf))))))
+
+(defun jenkins--request (method url-str &optional post-data content-type)
+  "Make a synchronous request; return parsed JSON or the raw body string.
+METHOD, URL-STR, POST-DATA and CONTENT-TYPE are as for `jenkins--http'."
+  (let ((body (jenkins--http method url-str post-data content-type)))
+    (condition-case nil
+        (json-parse-string body
+                           :object-type 'hash-table
+                           :array-type 'list
+                           :null-object nil
+                           :false-object nil)
+      (error body))))
+
 (defun jenkins--fetch-crumb ()
-  "Fetch CSRF protection crumb, returns cons of (HEADER . VALUE) or nil."
+  "Fetch the CSRF protection crumb as a cons (HEADER . VALUE), or nil."
   (condition-case nil
       (let* ((url (format "%s/crumbIssuer/api/json" (jenkins-base-url)))
              (res (jenkins--request "GET" url)))
@@ -149,32 +197,6 @@ Converts `:null` and `:json-false` values to nil."
             (when (and field crumb)
               (cons field crumb)))))
     (error nil)))
-
-(defun jenkins--request (method url-str &optional post-data content-type)
-  "Synchronous HTTP request returning parsed JSON or raw string."
-  (let ((url-request-method method)
-        (url-request-extra-headers
-         (delq nil
-               (list (cons "Authorization" (jenkins--auth-header))
-                     (when content-type (cons "Content-Type" content-type)))))
-        (url-request-data post-data))
-    (when (member method '("POST" "PUT" "DELETE"))
-      (let ((crumb (jenkins--fetch-crumb)))
-        (when crumb
-          (push crumb url-request-extra-headers))))
-    (with-current-buffer (url-retrieve-synchronously url-str t t)
-      (goto-char (point-min))
-      (re-search-forward "^$" nil t)
-      (forward-char 1)
-      (let ((body (buffer-substring-no-properties (point) (point-max))))
-        (kill-buffer (current-buffer))
-        (condition-case nil
-            (json-parse-string body
-                               :object-type 'hash-table
-                               :array-type 'list
-                               :null-object nil
-                               :false-object nil)
-          (error body))))))
 
 ;;; --- Core Jenkins Queries ---
 
