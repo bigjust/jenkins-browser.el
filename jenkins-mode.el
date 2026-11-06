@@ -333,9 +333,7 @@ build result string."
     (propertize "FAILURE" 'face '(:foreground "red" :weight bold)))
    ((equal result "ABORTED")
     (propertize "ABORTED" 'face '(:foreground "dim gray")))
-   ((and (stringp color) (string-prefix-p "anime" color))
-    (propertize "RUNNING" 'face '(:foreground "deep sky blue" :weight bold)))
-   ((and (stringp color) (string-match-p "_anime$" color))
+   ((and (stringp color) (string-match-p "\\`anime\\|_anime\\'" color))
     (propertize "RUNNING" 'face '(:foreground "deep sky blue" :weight bold)))
    (t
     (propertize (or result (and (stringp color) color) "NOT BUILT") 'face 'font-lock-comment-face))))
