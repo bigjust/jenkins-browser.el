@@ -202,36 +202,73 @@ Converts `:null` and `:json-false` values to nil."
     (let ((val (gethash key obj)))
       (if (memq val '(:null :json-false)) nil val))))
 
-(defun jenkins--http (method url-str &optional post-data content-type)
-  "Perform a synchronous HTTP request and return the response body string.
-METHOD is the HTTP verb and URL-STR the target.  POST-DATA and CONTENT-TYPE
-are sent with the request when non-nil.  A CSRF crumb is attached to
-state-changing methods.  Signal an error on HTTP status 400 or above."
+(defvar jenkins--crumb-cache nil
+  "Cached CSRF crumb as (KEY . CRUMB), or nil.
+KEY identifies the server and user the crumb was issued for, see
+`jenkins--crumb-key'.  CRUMB is a cons (HEADER . VALUE).")
+
+(defun jenkins--crumb-key ()
+  "Return a string identifying the current server and user."
+  (concat (or (jenkins--get-config "user") "") "@" (jenkins-base-url)))
+
+(defun jenkins--crumb ()
+  "Return the CSRF crumb for the current server, fetching it if needed.
+A crumb fetched successfully is cached until `jenkins--crumb-cache' is
+cleared.  Return nil when the server does not issue crumbs."
+  (let ((key (jenkins--crumb-key)))
+    (if (equal (car jenkins--crumb-cache) key)
+        (cdr jenkins--crumb-cache)
+      (let ((crumb (jenkins--fetch-crumb)))
+        (when crumb
+          (setq jenkins--crumb-cache (cons key crumb)))
+        crumb))))
+
+(defun jenkins--send (method url-str post-data content-type crumb)
+  "Perform a synchronous HTTP request; return (STATUS . BODY).
+METHOD, URL-STR, POST-DATA and CONTENT-TYPE are as for `jenkins--http'.
+CRUMB is a cons (HEADER . VALUE) to send as a header, or nil.  BODY is
+decoded as UTF-8.  Never signal an error because of the HTTP status."
   (let* ((auth (jenkins--auth-header))
          (url-request-method method)
          (url-request-extra-headers
           (delq nil
                 (list (when auth (cons "Authorization" auth))
-                      (when content-type (cons "Content-Type" content-type)))))
-         (url-request-data post-data))
-    (when (member method '("POST" "PUT" "DELETE"))
-      (let ((crumb (jenkins--fetch-crumb)))
-        (when crumb
-          (push crumb url-request-extra-headers))))
-    (let ((buf (url-retrieve-synchronously url-str t t jenkins-request-timeout)))
-      (unless buf
-        (error "No response from Jenkins for %s" url-str))
-      (with-current-buffer buf
-        (unwind-protect
-            (let ((status (bound-and-true-p url-http-response-status)))
-              (goto-char (point-min))
-              (re-search-forward "^$" nil t)
-              (forward-char 1)
-              (when (and (integerp status) (>= status 400))
-                (error "Jenkins returned HTTP %d for %s" status url-str))
-              (decode-coding-string
-               (buffer-substring-no-properties (point) (point-max)) 'utf-8))
-          (kill-buffer buf))))))
+                      (when content-type (cons "Content-Type" content-type))
+                      crumb)))
+         (url-request-data post-data)
+         (buf (url-retrieve-synchronously url-str t t jenkins-request-timeout)))
+    (unless buf
+      (error "No response from Jenkins for %s" url-str))
+    (with-current-buffer buf
+      (unwind-protect
+          (let ((status (bound-and-true-p url-http-response-status)))
+            (goto-char (point-min))
+            (re-search-forward "^$" nil t)
+            (forward-char 1)
+            (cons status
+                  (decode-coding-string
+                   (buffer-substring-no-properties (point) (point-max))
+                   'utf-8)))
+        (kill-buffer buf)))))
+
+(defun jenkins--http (method url-str &optional post-data content-type)
+  "Perform a synchronous HTTP request and return the response body string.
+METHOD is the HTTP verb and URL-STR the target.  POST-DATA and CONTENT-TYPE
+are sent with the request when non-nil.  A CSRF crumb is attached to
+state-changing methods; it is cached, and if the server rejects the
+request with HTTP 403 the crumb is refreshed and the request retried once.
+Signal an error on HTTP status 400 or above."
+  (let* ((state-changing (member method '("POST" "PUT" "DELETE")))
+         (crumb (and state-changing (jenkins--crumb)))
+         (resp (jenkins--send method url-str post-data content-type crumb)))
+    (when (and crumb (eql (car resp) 403))
+      (setq jenkins--crumb-cache nil)
+      (let ((fresh (jenkins--crumb)))
+        (when (and fresh (not (equal fresh crumb)))
+          (setq resp (jenkins--send method url-str post-data content-type fresh)))))
+    (when (and (integerp (car resp)) (>= (car resp) 400))
+      (error "Jenkins returned HTTP %d for %s" (car resp) url-str))
+    (cdr resp)))
 
 (defun jenkins--request (method url-str &optional post-data content-type)
   "Make a synchronous request; return parsed JSON or the raw body string.

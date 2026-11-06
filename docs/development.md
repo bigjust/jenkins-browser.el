@@ -11,7 +11,7 @@ The file is organised in sections, top to bottom:
 | --- | --- |
 | Configuration & Credentials | `jenkins--parse-ini-file`, `jenkins--get-config`, `jenkins-base-url`, `jenkins--auth-header` |
 | Job paths | `jenkins--job-path`, `jenkins--job-url`, `jenkins--join-path` |
-| API & HTTP helper | `jenkins--http` (raw body), `jenkins--request` (parsed JSON), `jenkins--fetch-crumb`, `jenkins--get` |
+| API & HTTP helper | `jenkins--http` (raw body), `jenkins--request` (parsed JSON), `jenkins--send`, `jenkins--crumb`, `jenkins--fetch-crumb`, `jenkins--get` |
 | Core Jenkins queries | `jenkins--jobs-url`, `jenkins--fetch-jobs`, `jenkins--folder-p`, formatting helpers |
 | Refresh handling | `jenkins--refresh-later`, and the shared auto-refresh timer |
 | Jobs UI | `jenkins--job-entries`, `jenkins-mode`, folder navigation |
@@ -38,7 +38,7 @@ build number, and the buffer-local `jenkins--history-job` holds the full job pat
 
 - `jenkins--http` does the request and returns the response body as a UTF-8 decoded string. It signals an error for status >= 400. An empty body is returned as `""`, which is what a successful `POST` to `/build` gives.
 - `jenkins--request` calls it and tries to parse JSON (hash-tables, lists, `nil` for null and false). If parsing fails, it returns the raw body, which is how console text and empty POST responses are handled.
-- For `POST`, `PUT` and `DELETE` it first fetches a CSRF crumb from `/crumbIssuer/api/json` and sends it as a header. If the crumb endpoint is missing, the request goes ahead without one.
+- For `POST`, `PUT` and `DELETE` it sends a CSRF crumb from `/crumbIssuer/api/json` as a header. The crumb is cached per server and user in `jenkins--crumb-cache`. On an HTTP 403 the cache is cleared, a fresh crumb is fetched and the request is retried once (only if the crumb changed). If the crumb endpoint is missing, the request goes ahead without one, and nothing is cached.
 - Requests are **synchronous** (`url-retrieve-synchronously`) with `jenkins-request-timeout`.
 
 ### Queries use `tree=`

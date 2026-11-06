@@ -31,7 +31,8 @@
   `(let ((jenkins-url "https://ci.example.com/")
          (jenkins-username "bob")
          (jenkins-api-token "tok")
-         (jenkins-view-name nil))
+         (jenkins-view-name nil)
+         (jenkins--crumb-cache nil))
      ,@body))
 
 ;;; Config
@@ -488,6 +489,80 @@ no match gets a 404.  Requests are recorded in `jenkins-test--http-calls'."
        (should (equal (plist-get post :method) "POST"))
        (should (assoc "Authorization" (plist-get post :headers)))
        (should (= (length (plist-get post :headers)) 1))))))
+
+(ert-deftest jenkins-test-http-crumb-is-cached ()
+  (jenkins-test--with-config
+   (jenkins-test--with-http
+       '(("/crumbIssuer/api/json" 200 . "{\"crumbRequestField\":\"Jenkins-Crumb\",\"crumb\":\"abc123\"}")
+         ("/build" 201 . ""))
+     (dotimes (_ 3)
+       (jenkins--http "POST" "https://ci.example.com/job/j/build"))
+     (should (= (length (jenkins-test--calls-to "/crumbIssuer/api/json")) 1))
+     (should (= (length (jenkins-test--calls-to "/build")) 3))
+     (dolist (post (jenkins-test--calls-to "/build"))
+       (should (equal (cdr (assoc "Jenkins-Crumb" (plist-get post :headers))) "abc123"))))))
+
+(ert-deftest jenkins-test-http-crumb-cache-is-per-server-and-user ()
+  (jenkins-test--with-config
+   (jenkins-test--with-http
+       '(("/crumbIssuer/api/json" 200 . "{\"crumbRequestField\":\"Jenkins-Crumb\",\"crumb\":\"abc123\"}")
+         ("/build" 201 . ""))
+     (jenkins--http "POST" "https://ci.example.com/job/j/build")
+     (let ((jenkins-username "alice"))
+       (jenkins--http "POST" "https://ci.example.com/job/j/build"))
+     (let ((jenkins-url "https://other.example.com"))
+       (jenkins--http "POST" "https://other.example.com/job/j/build"))
+     (should (= (length (jenkins-test--calls-to "/crumbIssuer/api/json")) 3)))))
+
+(ert-deftest jenkins-test-http-missing-crumb-endpoint-is-not-cached ()
+  (jenkins-test--with-config
+   (jenkins-test--with-http '(("/build" 201 . ""))
+     (jenkins--http "POST" "https://ci.example.com/job/j/build")
+     (jenkins--http "POST" "https://ci.example.com/job/j/build")
+     (should (null jenkins--crumb-cache))
+     (should (= (length (jenkins-test--calls-to "/crumbIssuer/api/json")) 2)))))
+
+(ert-deftest jenkins-test-http-get-does-not-fetch-crumb ()
+  (jenkins-test--with-config
+   (jenkins-test--with-http '(("/x" 200 . "ok"))
+     (jenkins--http "GET" "https://ci.example.com/x")
+     (should (null (jenkins-test--calls-to "/crumbIssuer/api/json"))))))
+
+(ert-deftest jenkins-test-http-403-refreshes-crumb-and-retries-once ()
+  (jenkins-test--with-config
+   (let ((issued 1) (posts nil))        ; c1 is already in the cache
+     (cl-letf (((symbol-function 'url-retrieve-synchronously)
+                (lambda (url &rest _)
+                  (cond
+                   ((string-suffix-p "/crumbIssuer/api/json" url)
+                    (setq issued (1+ issued))
+                    (jenkins-test--response-buffer
+                     200 (format "{\"crumbRequestField\":\"Jenkins-Crumb\",\"crumb\":\"c%d\"}" issued)))
+                   (t
+                    (let ((sent (cdr (assoc "Jenkins-Crumb" url-request-extra-headers))))
+                      (push sent posts)
+                      ;; Only the second crumb is accepted.
+                      (jenkins-test--response-buffer (if (equal sent "c2") 201 403) "")))))))
+       ;; Prime the cache with c1, then it goes stale.
+       (setq jenkins--crumb-cache (cons (jenkins--crumb-key) '("Jenkins-Crumb" . "c1")))
+       (should (equal (jenkins--http "POST" "https://ci.example.com/job/j/build") ""))
+       (should (equal (reverse posts) '("c1" "c2")))
+       (should (equal (cdr (cdr jenkins--crumb-cache)) "c2"))))))
+
+(ert-deftest jenkins-test-http-403-does-not-retry-forever ()
+  (jenkins-test--with-config
+   (let ((posts 0))
+     (cl-letf (((symbol-function 'url-retrieve-synchronously)
+                (lambda (url &rest _)
+                  (if (string-suffix-p "/crumbIssuer/api/json" url)
+                      (jenkins-test--response-buffer
+                       200 "{\"crumbRequestField\":\"Jenkins-Crumb\",\"crumb\":\"same\"}")
+                    (setq posts (1+ posts))
+                    (jenkins-test--response-buffer 403 "")))))
+       (let ((err (should-error (jenkins--http "POST" "https://ci.example.com/job/j/build"))))
+         (should (string-match-p "403" (error-message-string err))))
+       ;; Same crumb comes back, so there is nothing to retry with.
+       (should (= posts 1))))))
 
 (ert-deftest jenkins-test-http-sends-data-and-content-type ()
   (jenkins-test--with-config
