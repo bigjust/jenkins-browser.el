@@ -78,11 +78,12 @@ A single timer refreshes every Jenkins buffer that is currently visible. It
 starts when a Jenkins buffer is created, and stops by itself when the last one
 is killed.
 
-Requests are synchronous, so Emacs blocks while a refresh runs. A slow server
-combined with a short interval makes Emacs feel sluggish; 30 seconds or more
-is a sensible starting point. If a refresh fails, the error is shown in the
-echo area and the timer keeps running. The interval is read when the timer is
-created, so after changing it, kill your Jenkins buffers and reopen them.
+Timer refreshes run in the background, so Emacs stays responsive while
+Jenkins answers. A buffer whose previous refresh has not finished yet is
+skipped on the next tick. If a refresh fails or times out
+(`jenkins-request-timeout`), the error is shown in the echo area, the old rows
+stay on screen and the timer keeps running. The interval is read when the timer
+is created, so after changing it, kill your Jenkins buffers and reopen them.
 
 ### Folder detection
 

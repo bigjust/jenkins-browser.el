@@ -89,10 +89,10 @@ the root buffer, not to folders opened from it."
 
 (defcustom jenkins-auto-refresh-interval nil
   "Auto-refresh interval in seconds for visible Jenkins buffers.
-Set to nil or 0 to disable auto-refresh.  Requests are synchronous, so
-Emacs blocks for the duration of each refresh; keep the interval
-generous on slow servers.  The value is read when a Jenkins buffer is
-created."
+Set to nil or 0 to disable auto-refresh.  Refreshes run in the
+background and do not block Emacs; a buffer whose previous refresh is
+still waiting for Jenkins is skipped.  The value is read when a Jenkins
+buffer is created."
   :type '(choice (const :tag "Disabled" nil) integer)
   :group 'jenkins)
 
@@ -223,6 +223,19 @@ cleared.  Return nil when the server does not issue crumbs."
           (setq jenkins--crumb-cache (cons key crumb)))
         crumb))))
 
+(defun jenkins--parse-response ()
+  "Return (STATUS . BODY) for the HTTP response in the current buffer.
+STATUS is the HTTP status code or nil.  BODY is decoded as UTF-8."
+  (let ((status (bound-and-true-p url-http-response-status)))
+    (goto-char (point-min))
+    (re-search-forward "^$" nil t)
+    (unless (eobp)
+      (forward-char 1))
+    (cons status
+          (decode-coding-string
+           (buffer-substring-no-properties (point) (point-max))
+           'utf-8))))
+
 (defun jenkins--send (method url-str post-data content-type crumb)
   "Perform a synchronous HTTP request; return (STATUS . BODY).
 METHOD, URL-STR, POST-DATA and CONTENT-TYPE are as for `jenkins--http'.
@@ -241,14 +254,7 @@ decoded as UTF-8.  Never signal an error because of the HTTP status."
       (error "No response from Jenkins for %s" url-str))
     (with-current-buffer buf
       (unwind-protect
-          (let ((status (bound-and-true-p url-http-response-status)))
-            (goto-char (point-min))
-            (re-search-forward "^$" nil t)
-            (forward-char 1)
-            (cons status
-                  (decode-coding-string
-                   (buffer-substring-no-properties (point) (point-max))
-                   'utf-8)))
+          (jenkins--parse-response)
         (kill-buffer buf)))))
 
 (defun jenkins--http (method url-str &optional post-data content-type)
@@ -270,17 +276,81 @@ Signal an error on HTTP status 400 or above."
       (error "Jenkins returned HTTP %d for %s" (car resp) url-str))
     (cdr resp)))
 
+(defun jenkins--parse-json (body)
+  "Parse BODY as JSON into hash-tables and lists, or return BODY unchanged.
+JSON null and false both become nil."
+  (condition-case nil
+      (json-parse-string body
+                         :object-type 'hash-table
+                         :array-type 'list
+                         :null-object nil
+                         :false-object nil)
+    (error body)))
+
 (defun jenkins--request (method url-str &optional post-data content-type)
   "Make a synchronous request; return parsed JSON or the raw body string.
 METHOD, URL-STR, POST-DATA and CONTENT-TYPE are as for `jenkins--http'."
-  (let ((body (jenkins--http method url-str post-data content-type)))
-    (condition-case nil
-        (json-parse-string body
-                           :object-type 'hash-table
-                           :array-type 'list
-                           :null-object nil
-                           :false-object nil)
-      (error body))))
+  (jenkins--parse-json (jenkins--http method url-str post-data content-type)))
+
+(defun jenkins--request-async (url-str callback)
+  "Send a GET request to URL-STR without blocking Emacs.
+CALLBACK is called exactly once, with arguments (RESULT ERROR).  On
+success RESULT is the parsed JSON or raw body, as for `jenkins--request',
+and ERROR is nil.  On failure (connection problem, HTTP status 400 or
+above, or `jenkins-request-timeout' seconds without an answer) RESULT is
+nil and ERROR is a message string.  Only GET is supported, so no CSRF
+crumb is involved."
+  (let* ((auth (jenkins--auth-header))
+         (url-request-method "GET")
+         (url-request-extra-headers
+          (when auth (list (cons "Authorization" auth))))
+         (url-request-data nil)
+         (timeout jenkins-request-timeout)
+         (done nil)
+         (timer nil)
+         (buf nil))
+    (cl-flet ((finish (result err)
+                (unless done
+                  (setq done t)
+                  (when timer (cancel-timer timer))
+                  (condition-case cb-err
+                      (funcall callback result err)
+                    (error (message "jenkins: callback failed: %s"
+                                    (error-message-string cb-err)))))))
+      (setq buf
+            (url-retrieve
+             url-str
+             (lambda (status)
+               (let ((resp-buf (current-buffer)))
+                 (unwind-protect
+                     (let* ((resp (jenkins--parse-response))
+                            (code (car resp)))
+                       (cond
+                        ((and (integerp code) (>= code 400))
+                         (finish nil (format "Jenkins returned HTTP %d for %s"
+                                             code url-str)))
+                        ((plist-get status :error)
+                         (finish nil (format "Request to %s failed: %S" url-str
+                                             (plist-get status :error))))
+                        ((not (integerp code))
+                         (finish nil (format "No response from Jenkins for %s" url-str)))
+                        (t (finish (jenkins--parse-json (cdr resp)) nil))))
+                   (when (buffer-live-p resp-buf)
+                     (kill-buffer resp-buf)))))
+             nil t t))
+      ;; The callback may already have run if `url-retrieve' failed at once.
+      (unless done
+        (setq timer
+              (run-at-time
+               timeout nil
+               (lambda ()
+                 (unless done
+                   (finish nil (format "Request to %s timed out after %ss"
+                                       url-str timeout))
+                   (when (buffer-live-p buf)
+                     (let ((proc (get-buffer-process buf)))
+                       (when proc (delete-process proc)))
+                     (kill-buffer buf))))))))))
 
 (defun jenkins--fetch-crumb ()
   "Fetch the CSRF protection crumb as a cons (HEADER . VALUE), or nil."
@@ -305,11 +375,15 @@ METHOD, URL-STR, POST-DATA and CONTENT-TYPE are as for `jenkins--http'."
               (jenkins--job-path folder))
             "/api/json?tree=" (url-hexify-string tree))))
 
+(defun jenkins--jobs-from-response (resp)
+  "Return the list of job hash-tables in the parsed jobs response RESP."
+  (when (hash-table-p resp)
+    (jenkins--get "jobs" resp)))
+
 (defun jenkins--fetch-jobs (&optional folder)
   "Fetch all jobs in FOLDER (nil for the root) and their last build metadata."
-  (let ((resp (jenkins--request "GET" (jenkins--jobs-url folder))))
-    (when (hash-table-p resp)
-      (jenkins--get "jobs" resp))))
+  (jenkins--jobs-from-response
+   (jenkins--request "GET" (jenkins--jobs-url folder))))
 
 (defun jenkins--folder-p (job)
   "Return non-nil if the job hash-table JOB can contain other jobs."
@@ -377,10 +451,43 @@ build result string."
 
 ;;; --- Refresh handling ---
 
+(defvar-local jenkins--refresh-in-flight nil
+  "Non-nil while a background refresh of this buffer is waiting for Jenkins.")
+
+(defun jenkins--apply-refresh (resp)
+  "Replace the entries of the current buffer using the parsed response RESP."
+  (setq tabulated-list-entries
+        (if (derived-mode-p 'jenkins-build-history-mode)
+            (jenkins--build-history-entries (jenkins--builds-from-response resp))
+          (jenkins--build-job-entries (jenkins--jobs-from-response resp))))
+  (tabulated-list-print t))
+
 (defun jenkins--refresh-current ()
-  "Refresh the current Jenkins buffer, whichever kind it is."
-  (cond ((derived-mode-p 'jenkins-mode) (jenkins-refresh))
-        ((derived-mode-p 'jenkins-build-history-mode) (jenkins-history-refresh))))
+  "Refresh the current Jenkins buffer in the background, without blocking.
+The request is sent asynchronously and the buffer is updated when the
+answer arrives; a failure is reported with `message' and the old contents
+are kept.  Do nothing if a refresh of this buffer is already under way."
+  (let ((history (derived-mode-p 'jenkins-build-history-mode)))
+    (when (and (not jenkins--refresh-in-flight)
+               (or (not history) jenkins--history-job))
+      (let ((buf (current-buffer))
+            (url (if history
+                     (jenkins--history-url jenkins--history-job)
+                   (jenkins--jobs-url jenkins--folder))))
+        (setq jenkins--refresh-in-flight t)
+        (condition-case err
+            (jenkins--request-async
+             url
+             (lambda (resp error-message)
+               (when (buffer-live-p buf)
+                 (with-current-buffer buf
+                   (setq jenkins--refresh-in-flight nil)
+                   (if error-message
+                       (message "jenkins refresh failed: %s" error-message)
+                     (jenkins--apply-refresh resp))))))
+          (error
+           (setq jenkins--refresh-in-flight nil)
+           (signal (car err) (cdr err))))))))
 
 (defun jenkins--refresh-later ()
   "Refresh the current Jenkins buffer in a couple of seconds."
@@ -390,10 +497,14 @@ build result string."
                    (lambda ()
                      (when (buffer-live-p buf)
                        (with-current-buffer buf
-                         (jenkins--refresh-current))))))))
+                         (condition-case err
+                             (jenkins--refresh-current)
+                           (error (message "jenkins refresh failed: %s"
+                                           (error-message-string err)))))))))))
 
 (defun jenkins--timer-tick ()
-  "Refresh all visible Jenkins buffers; stop the timer when none are left."
+  "Refresh all visible Jenkins buffers; stop the timer when none are left.
+The refreshes run in the background, see `jenkins--refresh-current'."
   (let (found)
     (dolist (buf (buffer-list))
       (with-current-buffer buf
@@ -426,10 +537,13 @@ build result string."
 ;;; --- Tabulated List UI for Jobs ---
 
 (defun jenkins--job-entries ()
-  "Generate tabulated list entries from Jenkins jobs.
+  "Fetch the jobs of the current folder and return their list entries."
+  (jenkins--build-job-entries (jenkins--fetch-jobs jenkins--folder)))
+
+(defun jenkins--build-job-entries (jobs)
+  "Generate tabulated list entries from the job hash-tables JOBS.
 Each entry id is a cons (NAME . FOLDER-P)."
-  (let ((jobs (jenkins--fetch-jobs jenkins--folder))
-        entries)
+  (let (entries)
     (dolist (job (if (listp jobs) jobs nil))
       (when (hash-table-p job)
         (let* ((name (jenkins--get "name" job))
@@ -631,20 +745,29 @@ JOB is a slash-separated path such as \"folder/job\"."
 
 ;;; --- Build History Mode ---
 
+(defun jenkins--history-url (job)
+  "Return the API URL listing the recent builds of JOB."
+  (let ((tree (format "builds[number,result,building,duration,timestamp,displayName,description,culprits[fullName]]{0,%d}"
+                      jenkins-history-limit)))
+    (jenkins--job-url job (format "/api/json?tree=%s" (url-hexify-string tree)))))
+
+(defun jenkins--builds-from-response (resp)
+  "Return the list of build hash-tables in the parsed history response RESP."
+  (when (hash-table-p resp)
+    (jenkins--get "builds" resp)))
+
 (defun jenkins--fetch-build-history (job)
   "Fetch builds list for JOB."
-  (let* ((tree (format "builds[number,result,building,duration,timestamp,displayName,description,culprits[fullName]]{0,%d}"
-                       jenkins-history-limit))
-         (resp (jenkins--request
-                "GET" (jenkins--job-url job (format "/api/json?tree=%s"
-                                                    (url-hexify-string tree))))))
-    (when (hash-table-p resp)
-      (jenkins--get "builds" resp))))
+  (jenkins--builds-from-response
+   (jenkins--request "GET" (jenkins--history-url job))))
 
 (defun jenkins--history-entries (job)
-  "Generate tabulated list entries for build history of JOB."
-  (let ((builds (jenkins--fetch-build-history job))
-        entries)
+  "Fetch the builds of JOB and return their list entries."
+  (jenkins--build-history-entries (jenkins--fetch-build-history job)))
+
+(defun jenkins--build-history-entries (builds)
+  "Generate tabulated list entries from the build hash-tables BUILDS."
+  (let (entries)
     (dolist (b (if (listp builds) builds nil))
       (when (hash-table-p b)
         (let* ((num (jenkins--get "number" b))

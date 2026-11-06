@@ -13,7 +13,7 @@ The file is organised in sections, top to bottom:
 | Job paths | `jenkins--job-path`, `jenkins--job-url`, `jenkins--join-path` |
 | API & HTTP helper | `jenkins--http` (raw body), `jenkins--request` (parsed JSON), `jenkins--send`, `jenkins--crumb`, `jenkins--fetch-crumb`, `jenkins--get` |
 | Core Jenkins queries | `jenkins--jobs-url`, `jenkins--fetch-jobs`, `jenkins--folder-p`, formatting helpers |
-| Refresh handling | `jenkins--refresh-later`, and the shared auto-refresh timer |
+| Refresh handling | `jenkins--refresh-current`, `jenkins--refresh-later`, and the shared auto-refresh timer |
 | Jobs UI | `jenkins--job-entries`, `jenkins-mode`, folder navigation |
 | Build history | `jenkins--fetch-build-history`, `jenkins--history-entries`, `jenkins-build-history-mode` |
 | Console | `jenkins-console-mode`, `jenkins-view-console` |
@@ -39,7 +39,8 @@ build number, and the buffer-local `jenkins--history-job` holds the full job pat
 - `jenkins--http` does the request and returns the response body as a UTF-8 decoded string. It signals an error for status >= 400. An empty body is returned as `""`, which is what a successful `POST` to `/build` gives.
 - `jenkins--request` calls it and tries to parse JSON (hash-tables, lists, `nil` for null and false). If parsing fails, it returns the raw body, which is how console text and empty POST responses are handled.
 - For `POST`, `PUT` and `DELETE` it sends a CSRF crumb from `/crumbIssuer/api/json` as a header. The crumb is cached per server and user in `jenkins--crumb-cache`. On an HTTP 403 the cache is cleared, a fresh crumb is fetched and the request is retried once (only if the crumb changed). If the crumb endpoint is missing, the request goes ahead without one, and nothing is cached.
-- Requests are **synchronous** (`url-retrieve-synchronously`) with `jenkins-request-timeout`.
+- Requests made through `jenkins--http` and `jenkins--request` are **synchronous** (`url-retrieve-synchronously`) with `jenkins-request-timeout`.
+- `jenkins--request-async URL CALLBACK` is the non-blocking variant (GET only, so no crumb). It calls `CALLBACK` once with `(RESULT ERROR)`, where `ERROR` is a message string for connection failures, HTTP status >= 400 and timeouts. It enforces `jenkins-request-timeout` itself, and ignores an answer that arrives after the timeout.
 
 ### Queries use `tree=`
 
@@ -51,6 +52,13 @@ keeps responses small. The history query adds `{0,N}` to limit the number of bui
 One global timer (`jenkins--refresh-timer`) is started by the major-mode
 functions when `jenkins-auto-refresh-interval` is positive. Each tick refreshes
 every visible Jenkins buffer, and cancels the timer if no Jenkins buffers remain.
+
+Ticks and the refresh after an action use `jenkins--refresh-current`, which
+sends the query with `jenkins--request-async` and fills the buffer in the
+callback (`jenkins--apply-refresh`). The buffer-local `jenkins--refresh-in-flight`
+stops a second refresh from starting while one is waiting, and a failed refresh
+keeps the old rows. The interactive `jenkins-refresh` and `jenkins-history-refresh`
+(`g`) stay synchronous, so they report errors directly.
 
 ## Running the checks
 

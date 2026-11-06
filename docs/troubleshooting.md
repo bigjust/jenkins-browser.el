@@ -46,10 +46,11 @@ builds need to be compiled with `--with-json` (libjansson). Check with
 
 ## Emacs freezes briefly
 
-Requests are synchronous. Slow servers or a short
-`jenkins-auto-refresh-interval` will make Emacs wait. Raise the interval, or
-set it to `nil`. A hung server is cut off after `jenkins-request-timeout`
-seconds.
+Auto-refresh and the refresh after triggering or aborting a build run in the
+background. Opening a buffer, pressing `g`, viewing a console and the commands
+that change state (trigger, abort) are synchronous, so a slow server makes
+Emacs wait for that one request. A hung server is cut off after
+`jenkins-request-timeout` seconds.
 
 ## Self-signed certificates
 

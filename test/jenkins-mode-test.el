@@ -609,6 +609,234 @@ no match gets a 404.  Requests are recorded in `jenkins-test--http-calls'."
      (should (equal (jenkins--request "GET" "https://ci.example.com/t") "plain text\nlog"))
      (should (equal (jenkins--request "POST" "https://ci.example.com/e") "")))))
 
+;;; Async requests
+
+(defun jenkins-test--stub-retrieve (status body &optional error-plist)
+  "Return a stand-in for `url-retrieve' that answers with STATUS and BODY.
+The callback runs immediately, in a fresh response buffer, with
+ERROR-PLIST as its status argument."
+  (lambda (url callback &rest _)
+    (push (list :url url
+                :method url-request-method
+                :headers url-request-extra-headers)
+          jenkins-test--http-calls)
+    (let ((buf (jenkins-test--response-buffer status body)))
+      (with-current-buffer buf
+        (funcall callback error-plist))
+      buf)))
+
+(defun jenkins-test--async (stub &optional url)
+  "Run `jenkins--request-async' with the `url-retrieve' replacement STUB.
+Return the list of callback invocations, each (RESULT ERROR)."
+  (let (calls (jenkins-test--http-calls nil))
+    (cl-letf (((symbol-function 'url-retrieve) stub))
+      (jenkins--request-async (or url "https://ci.example.com/x")
+                              (lambda (r e) (push (list r e) calls))))
+    (nreverse calls)))
+
+(ert-deftest jenkins-test-async-success-parses-json ()
+  (jenkins-test--with-config
+   (let ((calls (jenkins-test--async
+                 (jenkins-test--stub-retrieve 200 "{\"a\":1}"))))
+     (should (= (length calls) 1))
+     (should (null (cadr (car calls))))
+     (should (= (gethash "a" (car (car calls))) 1)))))
+
+(ert-deftest jenkins-test-async-returns-raw-text-when-not-json ()
+  (jenkins-test--with-config
+   (should (equal (jenkins-test--async (jenkins-test--stub-retrieve 200 "plain"))
+                  '(("plain" nil))))))
+
+(ert-deftest jenkins-test-async-sends-auth-header-with-get ()
+  (jenkins-test--with-config
+   (let ((jenkins-test--http-calls nil))
+     (cl-letf (((symbol-function 'url-retrieve) (jenkins-test--stub-retrieve 200 "{}")))
+       (jenkins--request-async "https://ci.example.com/x" #'ignore))
+     (let ((call (car jenkins-test--http-calls)))
+       (should (equal (plist-get call :method) "GET"))
+       (should (equal (cdr (assoc "Authorization" (plist-get call :headers)))
+                      (jenkins--auth-header)))))))
+
+(ert-deftest jenkins-test-async-http-error-reaches-callback ()
+  (jenkins-test--with-config
+   (dolist (status '(401 403 404 500))
+     (let* ((calls (jenkins-test--async (jenkins-test--stub-retrieve status "no")))
+            (call (car calls)))
+       (should (= (length calls) 1))
+       (should (null (car call)))
+       (should (string-match-p (format "HTTP %d" status) (cadr call)))))))
+
+(ert-deftest jenkins-test-async-connection-error-reaches-callback ()
+  (jenkins-test--with-config
+   (let ((calls (jenkins-test--async
+                 (jenkins-test--stub-retrieve 0 "" '(:error (error connection-failed "refused"))))))
+     (should (= (length calls) 1))
+     (should (null (car (car calls))))
+     (should (string-match-p "connection-failed" (cadr (car calls)))))))
+
+(ert-deftest jenkins-test-async-kills-response-buffer ()
+  (jenkins-test--with-config
+   (let ((before (buffer-list)))
+     (jenkins-test--async (jenkins-test--stub-retrieve 200 "{}"))
+     (jenkins-test--async (jenkins-test--stub-retrieve 500 ""))
+     (should (equal (buffer-list) before)))))
+
+(ert-deftest jenkins-test-async-callback-error-does-not-escape ()
+  (jenkins-test--with-config
+   (cl-letf (((symbol-function 'url-retrieve) (jenkins-test--stub-retrieve 200 "{}")))
+     (jenkins--request-async "https://ci.example.com/x"
+                             (lambda (&rest _) (error "boom")))
+     (should t))))
+
+(ert-deftest jenkins-test-async-times-out-once ()
+  (jenkins-test--with-config
+   (let ((jenkins-request-timeout 0.05)
+         (late nil)
+         (calls nil)
+         (buf (generate-new-buffer " *jenkins-test-pending*")))
+     (cl-letf (((symbol-function 'url-retrieve)
+                (lambda (_url callback &rest _)
+                  (setq late (lambda ()
+                               (with-current-buffer
+                                   (jenkins-test--response-buffer 200 "{}")
+                                 (funcall callback nil))))
+                  buf)))
+       (jenkins--request-async "https://ci.example.com/x"
+                               (lambda (r e) (push (list r e) calls))))
+     (accept-process-output nil 0.3)
+     (should (= (length calls) 1))
+     (should (null (car (car calls))))
+     (should (string-match-p "timed out" (cadr (car calls))))
+     (should-not (buffer-live-p buf))
+     ;; A response that shows up after the timeout is ignored.
+     (funcall late)
+     (should (= (length calls) 1)))))
+
+(ert-deftest jenkins-test-async-leaves-no-timer-when-answer-is-immediate ()
+  (jenkins-test--with-config
+   (let ((jenkins-request-timeout 600)
+         (before (copy-sequence timer-list)))
+     (cl-letf (((symbol-function 'url-retrieve) (jenkins-test--stub-retrieve 200 "{}")))
+       (jenkins--request-async "https://ci.example.com/x" #'ignore))
+     (should (equal timer-list before)))))
+
+(ert-deftest jenkins-test-async-cancels-timer-when-answer-comes-later ()
+  (jenkins-test--with-config
+   (let ((jenkins-request-timeout 600)
+         (before (copy-sequence timer-list))
+         callback)
+     (cl-letf (((symbol-function 'url-retrieve)
+                (lambda (_url cb &rest _)
+                  (setq callback cb)
+                  (generate-new-buffer " *jenkins-test-pending*"))))
+       (jenkins--request-async "https://ci.example.com/x" #'ignore))
+     (should-not (equal timer-list before))
+     (with-current-buffer (jenkins-test--response-buffer 200 "{}")
+       (funcall callback nil))
+     (should (equal timer-list before)))))
+
+;;; Background refresh
+
+(defvar jenkins-test--async-urls nil
+  "URLs requested through the stubbed `jenkins--request-async', newest first.")
+
+(defun jenkins-test--async-answering (body &optional error-message)
+  "Return a `jenkins--request-async' replacement that answers with BODY.
+It records the requested URLs in `jenkins-test--async-urls'.  With
+ERROR-MESSAGE the callback gets an error instead."
+  (lambda (url callback)
+    (push url jenkins-test--async-urls)
+    (funcall callback
+             (and (not error-message) (jenkins-test--json body))
+             error-message)))
+
+(ert-deftest jenkins-test-refresh-current-updates-jobs-buffer ()
+  (jenkins-test--with-config
+   (let ((jenkins-test--async-urls nil))
+     (cl-letf (((symbol-function 'jenkins--request-async)
+                (jenkins-test--async-answering jenkins-test--jobs-json)))
+       (with-temp-buffer
+         (jenkins-mode)
+         (setq jenkins--folder "team")
+         (jenkins--refresh-current)
+         (should (= (length tabulated-list-entries) 3))
+         (should (null jenkins--refresh-in-flight))
+         (should (string-prefix-p "https://ci.example.com/job/team/api/json"
+                                  (car jenkins-test--async-urls))))))))
+
+(ert-deftest jenkins-test-refresh-current-updates-history-buffer ()
+  (jenkins-test--with-config
+   (let ((jenkins-test--async-urls nil))
+     (cl-letf (((symbol-function 'jenkins--request-async)
+                (jenkins-test--async-answering
+                 "{\"builds\":[{\"number\":4,\"result\":\"SUCCESS\",\"building\":false}]}")))
+       (with-temp-buffer
+         (jenkins-build-history-mode)
+         (setq jenkins--history-job "team/job")
+         (jenkins--refresh-current)
+         (should (equal (mapcar #'car tabulated-list-entries) '(4)))
+         (should (string-prefix-p "https://ci.example.com/job/team/job/job/api/json?tree="
+                                  (car jenkins-test--async-urls))))))))
+
+(ert-deftest jenkins-test-refresh-current-keeps-rows-on-error ()
+  (jenkins-test--with-config
+   (cl-letf (((symbol-function 'jenkins--request-async)
+              (jenkins-test--async-answering nil "Jenkins returned HTTP 503")))
+     (with-temp-buffer
+       (jenkins-mode)
+       (setq tabulated-list-entries (list (list '("old") (vector "old" "" "" ""))))
+       (let ((before tabulated-list-entries))
+         (jenkins--refresh-current)
+         (should (eq tabulated-list-entries before))
+         (should (null jenkins--refresh-in-flight)))))))
+
+(ert-deftest jenkins-test-refresh-current-skips-while-in-flight ()
+  (jenkins-test--with-config
+   (let (pending (calls 0))
+     (cl-letf (((symbol-function 'jenkins--request-async)
+                (lambda (_url callback) (cl-incf calls) (setq pending callback))))
+       (with-temp-buffer
+         (jenkins-mode)
+         (jenkins--refresh-current)
+         (jenkins--refresh-current)
+         (should (= calls 1))
+         (should jenkins--refresh-in-flight)
+         ;; Once the answer arrives the next refresh goes through again.
+         (funcall pending (jenkins-test--json jenkins-test--jobs-json) nil)
+         (should-not jenkins--refresh-in-flight)
+         (jenkins--refresh-current)
+         (should (= calls 2)))))))
+
+(ert-deftest jenkins-test-refresh-current-ignores-killed-buffer ()
+  (jenkins-test--with-config
+   (let (pending)
+     (cl-letf (((symbol-function 'jenkins--request-async)
+                (lambda (_url callback) (setq pending callback))))
+       (with-temp-buffer
+         (jenkins-mode)
+         (jenkins--refresh-current))
+       (funcall pending (jenkins-test--json jenkins-test--jobs-json) nil)
+       (should t)))))
+
+(ert-deftest jenkins-test-refresh-current-clears-flag-when-send-fails ()
+  (jenkins-test--with-config
+   (cl-letf (((symbol-function 'jenkins--request-async)
+              (lambda (&rest _) (error "cannot send"))))
+     (with-temp-buffer
+       (jenkins-mode)
+       (should-error (jenkins--refresh-current))
+       (should-not jenkins--refresh-in-flight)))))
+
+(ert-deftest jenkins-test-refresh-current-needs-history-job ()
+  (jenkins-test--with-config
+   (let ((calls 0))
+     (cl-letf (((symbol-function 'jenkins--request-async)
+                (lambda (&rest _) (cl-incf calls))))
+       (with-temp-buffer
+         (jenkins-build-history-mode)
+         (jenkins--refresh-current)
+         (should (= calls 0)))))))
+
 ;;; Auto refresh
 
 (ert-deftest jenkins-test-timer-lifecycle ()
