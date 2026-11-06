@@ -441,11 +441,6 @@ Folders are always shown so that they can still be opened."
              "Showing ALL jobs"))
   (jenkins-refresh))
 
-(defun jenkins-current-job ()
-  "Get the job name at point, or nil."
-  (let ((id (tabulated-list-get-id)))
-    (when (consp id) (car id))))
-
 (defun jenkins--job-names ()
   "Return full paths of the non-folder jobs in the current folder."
   (delq nil
