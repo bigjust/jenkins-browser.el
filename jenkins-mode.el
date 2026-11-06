@@ -81,9 +81,9 @@ If nil, attempts to read from `~/.jenkins_jobs.ini`."
   :group 'jenkins)
 
 (defcustom jenkins-view-name nil
-  "Name of a Jenkins view to use as the top-level job list.
+  "Name of a Jenkins view to use as the root job list.
 If nil, the jobs of the Jenkins root are listed.  The view only applies to
-the top-level buffer, not to folders opened from it."
+the root buffer, not to folders opened from it."
   :type '(choice (const :tag "No view" nil) string)
   :group 'jenkins)
 
@@ -737,7 +737,7 @@ JOB is a slash-separated path such as \"folder/job\"."
 
 ;;;###autoload
 (defun jenkins-reload ()
-  "Force reload `jenkins-mode` and re-initialize the top-level Jenkins buffer."
+  "Force reload `jenkins-mode` and re-initialize the root Jenkins buffer."
   (interactive)
   (load-file (find-library-name "jenkins-mode"))
   (when (get-buffer "*Jenkins*")
