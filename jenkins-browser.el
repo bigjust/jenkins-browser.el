@@ -1086,14 +1086,19 @@ If the build is still running the buffer follows it, see
     (dolist (b (if (listp builds) builds nil))
       (when (hash-table-p b)
         (let* ((num (jenkins-browser--get "number" b))
+               (display-name (jenkins-browser--get "displayName" b))
                (result (jenkins-browser--get "result" b))
                (building (jenkins-browser--get "building" b))
                (duration (jenkins-browser--get "duration" b))
                (timestamp (jenkins-browser--get "timestamp" b))
-               (status-str (jenkins-browser--format-status nil building result)))
+               (status-str (jenkins-browser--format-status nil building result))
+               (build-label (if (and (stringp display-name)
+                                     (not (string-empty-p display-name)))
+                                display-name
+                              (if num (format "#%d" num) "-"))))
           (when num
             (push (list num
-                        (vector (propertize (format "#%d" num) 'face 'font-lock-keyword-face)
+                        (vector (propertize build-label 'face 'font-lock-keyword-face)
                                 status-str
                                 (jenkins-browser--format-timestamp timestamp)
                                 (jenkins-browser--format-culprits (jenkins-browser--get "culprits" b))

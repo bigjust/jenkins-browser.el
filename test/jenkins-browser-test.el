@@ -382,6 +382,26 @@ Collect the text of `display-warning' calls in the variable `warnings'."
        (should (equal (aref row 5) "hotfix for #12"))
        (should (equal (aref row2 5) "-"))))))
 
+(ert-deftest jenkins-browser-test-history-entries-display-name ()
+  (jenkins-browser-test--with-config
+   (cl-letf (((symbol-function 'jenkins-browser--request)
+              (lambda (&rest _)
+                (jenkins-browser-test--json
+                 "{\"builds\":[
+                    {\"number\":10,\"displayName\":\"release-1.0\",
+                     \"result\":\"SUCCESS\",\"building\":false,
+                     \"duration\":1000,\"timestamp\":1700000000000,
+                     \"culprits\":[],\"description\":null},
+                    {\"number\":9,\"displayName\":\"\",
+                     \"result\":\"SUCCESS\",\"building\":false,
+                     \"duration\":1000,\"timestamp\":1700000000000,
+                     \"culprits\":[],\"description\":null}]}"))))
+     (let* ((entries (jenkins-browser--history-entries "team/job"))
+            (row1 (cadr (car entries)))
+            (row2 (cadr (cadr entries))))
+       (should (equal (substring-no-properties (aref row1 0)) "release-1.0"))
+       (should (equal (substring-no-properties (aref row2 0)) "#9"))))))
+
 (ert-deftest jenkins-browser-test-history-url-has-limit-and-culprits ()
   (jenkins-browser-test--with-config
    (let ((jenkins-browser-history-limit 12) requested)
