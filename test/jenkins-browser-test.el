@@ -418,8 +418,8 @@ Collect the text of `display-warning' calls in the variable `warnings'."
   (jenkins-browser-test--with-config
    (let (calls)
      (cl-letf (((symbol-function 'jenkins-browser--request)
-                (lambda (method url &rest _)
-                  (push (cons method url) calls)
+                (lambda (method url &optional data type &rest _)
+                  (push (list method url data type) calls)
                   (if (string-suffix-p "/api/json" url)
                       (jenkins-browser-test--json
                        "{\"property\":[{\"parameterDefinitions\":[
@@ -430,15 +430,17 @@ Collect the text of `display-warning' calls in the variable `warnings'."
                ((symbol-function 'read-string) (lambda (&rest _) "feat x"))
                ((symbol-function 'completing-read) (lambda (&rest _) "prod")))
        (jenkins-browser-trigger-job "job")
-       (should (member '("POST" . "https://ci.example.com/job/job/buildWithParameters?BRANCH=feat%20x&ENV=prod")
-                       calls))))))
+       (should (equal (car calls)
+                      '("POST" "https://ci.example.com/job/job/buildWithParameters"
+                        "BRANCH=feat%20x&ENV=prod"
+                        "application/x-www-form-urlencoded")))))))
 
 (ert-deftest jenkins-browser-test-trigger-boolean-parameter ()
   (jenkins-browser-test--with-config
    (let (calls prompts)
      (cl-letf (((symbol-function 'jenkins-browser--request)
-                (lambda (method url &rest _)
-                  (push (cons method url) calls)
+                (lambda (method url &optional data type &rest _)
+                  (push (list method url data type) calls)
                   (if (string-suffix-p "/api/json" url)
                       (jenkins-browser-test--json
                        "{\"property\":[{\"parameterDefinitions\":[
@@ -452,8 +454,10 @@ Collect the text of `display-warning' calls in the variable `warnings'."
                   (push (cons coll default) prompts)
                   default)))
        (jenkins-browser-trigger-job "job")
-       (should (member '("POST" . "https://ci.example.com/job/job/buildWithParameters?DRY=true&CLEAN=false")
-                       calls))
+       (should (equal (car calls)
+                      '("POST" "https://ci.example.com/job/job/buildWithParameters"
+                        "DRY=true&CLEAN=false"
+                        "application/x-www-form-urlencoded")))
        (should (equal (reverse prompts)
                       '((("true" "false") . "true") (("true" "false") . "false"))))))))
 
@@ -461,8 +465,8 @@ Collect the text of `display-warning' calls in the variable `warnings'."
   (jenkins-browser-test--with-config
    (let (calls passwords)
      (cl-letf (((symbol-function 'jenkins-browser--request)
-                (lambda (method url &rest _)
-                  (push (cons method url) calls)
+                (lambda (method url &optional data type &rest _)
+                  (push (list method url data type) calls)
                   (if (string-suffix-p "/api/json" url)
                       (jenkins-browser-test--json
                        "{\"property\":[{\"parameterDefinitions\":[
@@ -475,8 +479,10 @@ Collect the text of `display-warning' calls in the variable `warnings'."
                   (push (cons prompt default) passwords)
                   "s3cr3t!")))
        (jenkins-browser-trigger-job "job")
-       (should (member '("POST" . "https://ci.example.com/job/job/buildWithParameters?SECRET_KEY=s3cr3t%21")
-                       calls))
+       (should (equal (car calls)
+                      '("POST" "https://ci.example.com/job/job/buildWithParameters"
+                        "SECRET_KEY=s3cr3t%21"
+                        "application/x-www-form-urlencoded")))
        (should (equal passwords '(("SECRET_KEY (auth key): " . "defpass"))))))))
 
 (ert-deftest jenkins-browser-test-abort-urls ()

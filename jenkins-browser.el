@@ -804,8 +804,9 @@ JOB is a slash-separated path such as \"folder/job\"."
                       query-params)))))
         (jenkins-browser--request
          "POST"
-         (jenkins-browser--job-url job (format "/buildWithParameters?%s"
-					       (string-join (nreverse query-params) "&"))))
+         (jenkins-browser--job-url job "/buildWithParameters")
+         (string-join (nreverse query-params) "&")
+         "application/x-www-form-urlencoded")
         (message "Triggered '%s' with parameters." job)))
     (jenkins-browser--refresh-later)))
 
