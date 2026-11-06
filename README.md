@@ -120,6 +120,33 @@ make check   # byte-compile, checkdoc, package-lint and the test suite
 make test    # just the tests (no Jenkins server needed)
 ```
 
+## Releasing
+
+Releases follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
+semantic versioning (the version is `Version:` in `jenkins-browser.el`). A
+release is a git tag `vX.Y.Z`; MELPA Stable builds from the same tag, while
+MELPA builds from `main`.
+
+1. Make sure `make check` passes and the changes are listed under
+   `## [Unreleased]` in [CHANGELOG.md](CHANGELOG.md).
+2. In one commit, set `;; Version: X.Y.Z` in `jenkins-browser.el`, rename
+   `## [Unreleased]` to `## [X.Y.Z] - YYYY-MM-DD`, add a new empty
+   `## [Unreleased]` above it, and update the link references at the bottom of
+   the changelog.
+3. Push `main` and wait for the CI workflow to pass on Emacs 27.1, 29.4 and 30.1.
+4. Tag that commit and push the tag:
+
+   ```bash
+   git tag -a vX.Y.Z -m "jenkins-browser X.Y.Z"
+   git push origin vX.Y.Z
+   ```
+
+The [release workflow](.github/workflows/release.yml) then runs on the tag. It
+fails if the tag does not equal the `Version:` header or the changelog has no
+section for that version, runs `make check`, and publishes the GitHub release
+with that changelog section as the notes. If it fails before publishing, fix
+the problem, delete the tag (`git push origin :refs/tags/vX.Y.Z`) and tag again.
+
 ## License
 
 Copyright (C) 2026 Justin Caratzas.
