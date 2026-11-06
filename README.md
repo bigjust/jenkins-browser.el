@@ -17,6 +17,7 @@ JSON support, which every Emacs 30 build has).
 - **Parameterized triggering**: reads the job's parameter definitions and prompts for each one. Choice parameters use `completing-read`, password parameters use `read-passwd`, and defaults are pre-filled.
 - **Re-trigger builds (`R`)**: re-run past builds with their historical parameters pre-filled.
 - **Build history**: build number, status, timestamp, **author (culprits)**, duration and **description** for the most recent builds (`jenkins-browser-history-limit`, default 50).
+- **Pipeline Stage View (`s`)**: view stages, per-stage status/duration, and individual stage execution logs.
 - **Build Queue (`Q`)**: inspect queued builds, queue reasons, elapsed time, and cancel queued items.
 - **Console viewer**: `^M` characters and Jenkins' hidden console annotations are stripped and the buffer is read-only. Any build can be opened, not just the latest. A running build is **followed live**: new output is fetched in the background and appended.
 - **Abort** the last build from the jobs list, or a specific build from the history.
@@ -81,6 +82,7 @@ All options, including views, timeouts and auto-refresh, are covered in
 | `h` | View build history for the job at point |
 | `c` | View console output of the latest build |
 | `b` | Trigger / build job (prompts for parameters) |
+| `s` | View pipeline stages of the latest build |
 | `Q` | Open the Jenkins build queue |
 | `f` | Toggle all jobs / running only |
 | `k` | Abort the latest build |
@@ -94,6 +96,7 @@ All options, including views, timeouts and auto-refresh, are covered in
 | --- | --- |
 | `RET` / `c` | View console output for the build at point |
 | `R` | Re-trigger build with previous parameters pre-filled |
+| `s` | View pipeline stages for the build at point |
 | `k` | Abort the build at point |
 | `Q` | Open the Jenkins build queue |
 | `g` | Refresh |
@@ -108,6 +111,16 @@ All options, including views, timeouts and auto-refresh, are covered in
 | `k` / `d` | Cancel the queue item at point |
 | `g` | Refresh |
 | `o` | Open queue item in the browser |
+| `q` | Quit window |
+
+### Pipeline stages (`*Jenkins-Stages: <job> #<n>*`)
+
+| Key | Action |
+| --- | --- |
+| `RET` / `c` | View full build console log |
+| `l` | View log output for the stage at point |
+| `g` | Refresh |
+| `o` | Open pipeline build in the browser |
 | `q` | Quit window |
 
 ### Console (`*Jenkins-Console: <job> #<n>*`)

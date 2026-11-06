@@ -645,6 +645,19 @@ Collect the text of `display-warning' calls in the variable `warnings'."
        (should (equal (car calls)
                       '("POST" . "https://ci.example.com/queue/cancelItem?id=42")))))))
 
+(ert-deftest jenkins-browser-test-stages-entries ()
+  (let* ((stages (jenkins-browser-test--json
+                  "[{\"id\":\"11\",\"name\":\"Declarative: Checkout SCM\",\"status\":\"SUCCESS\",
+                    \"startTimeMillis\":1700000000000,\"durationMillis\":5000},
+                   {\"id\":\"15\",\"name\":\"Build\",\"status\":\"FAILED\",
+                    \"startTimeMillis\":1700000005000,\"durationMillis\":120000}]"))
+         (entries (jenkins-browser--stages-entries stages)))
+    (should (= (length entries) 2))
+    (should (equal (car (car entries)) "11"))
+    (should (equal (aref (cadr (car entries)) 0) "Declarative: Checkout SCM"))
+    (should (equal (aref (cadr (car entries)) 1) "SUCCESS"))
+    (should (equal (aref (cadr (cadr entries)) 1) "FAILED"))))
+
 (ert-deftest jenkins-browser-test-abort-urls ()
   (jenkins-browser-test--with-config
    (let (calls)

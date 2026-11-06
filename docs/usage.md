@@ -78,6 +78,7 @@ are truncated (use `M-x toggle-truncate-lines` or widen the window).
 | --- | --- |
 | `RET`, `c` | Console of the build at point |
 | `R` | Re-trigger build with previous parameters pre-filled |
+| `s` | View pipeline stages |
 | `Q` | Open the Jenkins build queue |
 | `k` | Abort the build at point (after confirmation) |
 | `o` | Open the build in the browser |
@@ -125,6 +126,15 @@ pending builds across the server.
 - `RET` / `h` opens the build history for the queued job.
 - `g` refreshes the queue.
 
+### Pipeline stages (`s`)
+
+Pressing `s` on a job or build opens `*Jenkins-Stages: <job> #<build>*`
+(leveraging Jenkins' `wfapi` Pipeline Stage View):
+
+- Displays each stage (`Checkout`, `Build`, `Test`, `Deploy`), status, duration, and start time.
+- `l` opens the execution log for the specific stage at point.
+- `RET` / `c` opens the full build console.
+
 ### Multiple server profiles
 
 `M-x jenkins-browser-switch-server` lets you switch between different Jenkins
@@ -144,6 +154,7 @@ instances configured in `~/.jenkins_jobs.ini` (e.g. `[jenkins]`, `[staging]`, `[
 | `jenkins-browser-trigger-job` | Trigger a job |
 | `jenkins-browser-history-rebuild` | Re-trigger build with previous parameters |
 | `jenkins-browser-view-build-history` | Show a job's builds |
+| `jenkins-browser-view-stages` | Show pipeline stages for a build |
 | `jenkins-browser-view-console` | Show a build's console |
 | `jenkins-browser-abort-build` | Abort a job's last build |
 | `jenkins-browser-open-in-browser` | Open a job in the browser |

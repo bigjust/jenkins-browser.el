@@ -1238,6 +1238,7 @@ If the build is still running the buffer follows it, see
 (define-key jenkins-browser-build-history-mode-map (kbd "c")   #'jenkins-browser-history-view-console)
 (define-key jenkins-browser-build-history-mode-map (kbd "k")   #'jenkins-browser-history-abort-build)
 (define-key jenkins-browser-build-history-mode-map (kbd "R")   #'jenkins-browser-history-rebuild)
+(define-key jenkins-browser-build-history-mode-map (kbd "s")   #'jenkins-browser-history-view-stages)
 (define-key jenkins-browser-build-history-mode-map (kbd "Q")   #'jenkins-browser-queue)
 (define-key jenkins-browser-build-history-mode-map (kbd "o")   #'jenkins-browser-history-open-in-browser)
 
@@ -1270,6 +1271,7 @@ If the build is still running the buffer follows it, see
 (define-key jenkins-browser-mode-map (kbd "h")   #'jenkins-browser-view-build-history)
 (define-key jenkins-browser-mode-map (kbd "c")   #'jenkins-browser-view-console)
 (define-key jenkins-browser-mode-map (kbd "k")   #'jenkins-browser-abort-build)
+(define-key jenkins-browser-mode-map (kbd "s")   #'jenkins-browser-view-stages)
 (define-key jenkins-browser-mode-map (kbd "Q")   #'jenkins-browser-queue)
 (define-key jenkins-browser-mode-map (kbd "f")   #'jenkins-browser-toggle-running-filter)
 (define-key jenkins-browser-mode-map (kbd "o")   #'jenkins-browser-open-in-browser)
@@ -1415,6 +1417,151 @@ If the build is still running the buffer follows it, see
      (jenkins-browser-queue-mode)
      (jenkins-browser-queue-refresh))
    #'pop-to-buffer))
+
+;;; --- Pipeline Stages Mode ---
+
+(defvar-local jenkins-browser--stages-job nil
+  "Job path for the current stages buffer.")
+
+(defvar-local jenkins-browser--stages-build nil
+  "Build number for the current stages buffer.")
+
+(defvar jenkins-browser-stages-mode-map (make-sparse-keymap)
+  "Keymap for `jenkins-browser-stages-mode` buffers.")
+(set-keymap-parent jenkins-browser-stages-mode-map tabulated-list-mode-map)
+(define-key jenkins-browser-stages-mode-map (kbd "g")   #'jenkins-browser-stages-refresh)
+(define-key jenkins-browser-stages-mode-map (kbd "RET") #'jenkins-browser-stages-view-console)
+(define-key jenkins-browser-stages-mode-map [return]    #'jenkins-browser-stages-view-console)
+(define-key jenkins-browser-stages-mode-map (kbd "c")   #'jenkins-browser-stages-view-console)
+(define-key jenkins-browser-stages-mode-map (kbd "l")   #'jenkins-browser-stages-view-stage-log)
+(define-key jenkins-browser-stages-mode-map (kbd "o")   #'jenkins-browser-stages-open-in-browser)
+
+(define-derived-mode jenkins-browser-stages-mode tabulated-list-mode "Jenkins-Stages"
+  "Major mode for viewing Pipeline stages.
+
+\\{jenkins-browser-stages-mode-map}"
+  :keymap jenkins-browser-stages-mode-map
+  (setq tabulated-list-format
+        [("Stage"     32 t)
+         ("Status"    14 t)
+         ("Duration"  12 nil)
+         ("Started"   18 nil)])
+  (setq tabulated-list-padding 2)
+  (setq tabulated-list-sort-key (cons "Stage" nil))
+  (add-hook 'tabulated-list-revert-hook #'jenkins-browser-stages-refresh nil t)
+  (hl-line-mode 1)
+  (tabulated-list-init-header))
+
+(defun jenkins-browser--fetch-stages (job build-num)
+  "Fetch pipeline stage descriptions for BUILD-NUM of JOB via wfapi."
+  (let* ((url (jenkins-browser--job-url job (format "/%s/wfapi/describe" build-num)))
+         (resp (condition-case nil
+                   (jenkins-browser--request "GET" url)
+                 (error nil))))
+    (when (hash-table-p resp)
+      (jenkins-browser--get "stages" resp))))
+
+(defun jenkins-browser--stages-entries (stages)
+  "Generate tabulated list entries from STAGES list."
+  (let (entries)
+    (dolist (st (if (listp stages) stages nil))
+      (when (hash-table-p st)
+        (let* ((id (jenkins-browser--get "id" st))
+               (name (or (jenkins-browser--get "name" st) "Unknown"))
+               (status (or (jenkins-browser--get "status" st) "UNKNOWN"))
+               (duration (jenkins-browser--get "durationMillis" st))
+               (start (jenkins-browser--get "startTimeMillis" st))
+               (status-prop (cond
+                             ((equal status "SUCCESS")
+                              (propertize "SUCCESS" 'face '(:foreground "forest green" :weight bold)))
+                             ((member status '("IN_PROGRESS" "EXECUTING"))
+                              (propertize "RUNNING" 'face '(:foreground "deep sky blue" :weight bold)))
+                             ((equal status "FAILED")
+                              (propertize "FAILED" 'face '(:foreground "red" :weight bold)))
+                             ((equal status "PAUSED_PENDING_INPUT")
+                              (propertize "PAUSED" 'face '(:foreground "gold" :weight bold)))
+                             ((equal status "ABORTED")
+                              (propertize "ABORTED" 'face '(:foreground "dim gray")))
+                             (t
+                              (propertize status 'face 'font-lock-comment-face)))))
+          (when id
+            (push (list id
+                        (vector (propertize name 'face 'font-lock-function-name-face)
+                                status-prop
+                                (jenkins-browser--format-duration duration)
+                                (jenkins-browser--format-timestamp start)))
+                  entries)))))
+    (nreverse entries)))
+
+(defun jenkins-browser-stages-refresh ()
+  "Refresh the pipeline stages buffer."
+  (interactive)
+  (when (and jenkins-browser--stages-job jenkins-browser--stages-build)
+    (let ((stages (jenkins-browser--fetch-stages
+                   jenkins-browser--stages-job
+                   jenkins-browser--stages-build)))
+      (setq tabulated-list-entries (jenkins-browser--stages-entries stages))
+      (tabulated-list-print t))))
+
+(defun jenkins-browser-stages-view-console ()
+  "View full console for the current build."
+  (interactive)
+  (when (and jenkins-browser--stages-job jenkins-browser--stages-build)
+    (jenkins-browser-view-console jenkins-browser--stages-job jenkins-browser--stages-build)))
+
+(defun jenkins-browser-stages-view-stage-log ()
+  "View the log for the stage at point."
+  (interactive)
+  (let ((id (tabulated-list-get-id)))
+    (unless id
+      (user-error "No stage selected"))
+    (let* ((url (jenkins-browser--job-url
+                 jenkins-browser--stages-job
+                 (format "/%s/execution/node/%s/wfapi/log"
+                         jenkins-browser--stages-build id)))
+           (resp (jenkins-browser--request "GET" url))
+           (text (if (hash-table-p resp) (jenkins-browser--get "text" resp) nil)))
+      (if (and (stringp text) (not (string-empty-p text)))
+          (jenkins-browser--open-buffer
+           (format "*Jenkins-Stage-Log: %s #%s (%s)*"
+                   jenkins-browser--stages-job jenkins-browser--stages-build id)
+           (lambda ()
+             (jenkins-browser-console-mode)
+             (let ((inhibit-read-only t))
+               (erase-buffer)
+               (insert (ansi-color-apply (jenkins-browser--console-text text)))
+               (goto-char (point-min))))
+           #'pop-to-buffer)
+        (message "No specific log for stage '%s'" id)))))
+
+(defun jenkins-browser-stages-open-in-browser ()
+  "Open the pipeline run in the web browser."
+  (interactive)
+  (when (and jenkins-browser--stages-job jenkins-browser--stages-build)
+    (browse-url (jenkins-browser--job-url
+                 jenkins-browser--stages-job
+                 (format "/%s" jenkins-browser--stages-build)))))
+
+(defun jenkins-browser-history-view-stages (&optional build-num)
+  "View pipeline stages for BUILD-NUM of the current job."
+  (interactive (list (or (jenkins-browser-current-build-number) (user-error "No build selected"))))
+  (unless (and jenkins-browser--history-job build-num)
+    (user-error "Cannot view stages: missing job or build number"))
+  (jenkins-browser-view-stages jenkins-browser--history-job build-num))
+
+(defun jenkins-browser-view-stages (job &optional build-number)
+  "View pipeline stages for BUILD-NUMBER (default \"lastBuild\") of JOB."
+  (interactive (list (jenkins-browser--read-job "Stages for job: ")))
+  (let* ((build-id (or (and build-number (format "%s" build-number)) "lastBuild"))
+         (build (jenkins-browser--resolve-build job build-id)))
+    (jenkins-browser--open-buffer
+     (format "*Jenkins-Stages: %s #%s*" job build)
+     (lambda ()
+       (jenkins-browser-stages-mode)
+       (setq jenkins-browser--stages-job job
+             jenkins-browser--stages-build build)
+       (jenkins-browser-stages-refresh))
+     #'pop-to-buffer)))
 
 ;;;###autoload
 (defun jenkins-browser ()

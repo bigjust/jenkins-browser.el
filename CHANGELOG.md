@@ -7,6 +7,7 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- Pipeline Stage View and Step Inspector (`*Jenkins-Stages*`, `s`, `M-x jenkins-browser-view-stages`) via `wfapi`, with stage status, timing, and per-stage log viewing (`l`).
 - Build Queue viewer (`*Jenkins-Queue*`, `Q`, `M-x jenkins-browser-queue`) with item cancellation (`k` / `d`) and task navigation.
 - Re-trigger build command (`R` / `jenkins-browser-history-rebuild`) in build history to replay previous runs with historical parameters pre-filled.
 - Multiple Jenkins server profiles support (`M-x jenkins-browser-switch-server`) with interactive switching across sections in `~/.jenkins_jobs.ini`.
