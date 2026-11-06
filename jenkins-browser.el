@@ -796,9 +796,11 @@ Jenkins expects the strings \"true\" and \"false\" for these, not Lisp values."
                (string-match "/queue/item/\\([0-9]+\\)" loc))
       (match-string 1 loc))))
 
-(defun jenkins-browser-trigger-job (job)
+(defun jenkins-browser-trigger-job (job &optional override-defaults)
   "Interactively trigger JOB, prompting for parameters if defined.
-JOB is a slash-separated path such as \"folder/job\"."
+OVERRIDE-DEFAULTS is an optional alist mapping parameter names to
+default values (used when re-triggering builds).  JOB is a
+slash-separated path such as \"folder/job\"."
   (interactive (list (jenkins-browser--read-job "Trigger Job: ")))
   (let* ((info (jenkins-browser--request "GET" (jenkins-browser--job-url job "/api/json")))
          (props (when (hash-table-p info) (jenkins-browser--get "property" info)))
@@ -824,16 +826,24 @@ JOB is a slash-separated path such as \"folder/job\"."
             (let* ((p-name (jenkins-browser--get "name" p))
                    (p-desc (or (jenkins-browser--get "description" p) ""))
                    (default-obj (jenkins-browser--get "defaultParameterValue" p))
+                   (override-val (when (and override-defaults p-name)
+                                   (if (hash-table-p override-defaults)
+                                       (gethash p-name override-defaults)
+                                     (cdr (assoc p-name override-defaults)))))
                    (boolean-p (jenkins-browser--boolean-parameter-p p))
                    (password-p (jenkins-browser--password-parameter-p p))
-                   (p-default (if boolean-p
-                                  (if (and (hash-table-p default-obj)
-                                           (jenkins-browser--get "value" default-obj))
-                                      "true"
-                                    "false")
-                                (when (hash-table-p default-obj)
-                                  (let ((val (jenkins-browser--get "value" default-obj)))
-                                    (when val (format "%s" val))))))
+                   (p-default (cond
+                               ((and boolean-p override-val)
+                                (if (member override-val '(t "true" "True" 1)) "true" "false"))
+                               (override-val (format "%s" override-val))
+                               (boolean-p
+                                (if (and (hash-table-p default-obj)
+                                         (jenkins-browser--get "value" default-obj))
+                                    "true"
+                                  "false"))
+                               ((hash-table-p default-obj)
+                                (let ((val (jenkins-browser--get "value" default-obj)))
+                                  (when val (format "%s" val))))))
                    (choices (if boolean-p
                                 '("true" "false")
                               (jenkins-browser--get "choices" p)))
@@ -1173,6 +1183,32 @@ If the build is still running the buffer follows it, see
     (message "Requested abort for %s #%s" jenkins-browser--history-job build-num)
     (jenkins-browser--refresh-later)))
 
+(defun jenkins-browser-history-rebuild (&optional build-num)
+  "Re-trigger the current job with parameters from BUILD-NUM pre-filled."
+  (interactive (list (or (jenkins-browser-current-build-number) (user-error "No build selected"))))
+  (unless (and jenkins-browser--history-job build-num)
+    (user-error "Cannot rebuild: missing job or build number"))
+  (let* ((info (jenkins-browser--request
+                "GET"
+                (jenkins-browser--job-url
+                 jenkins-browser--history-job
+                 (format "/%s/api/json?tree=actions[parameters[name,value]]" build-num))))
+         (actions (and (hash-table-p info) (jenkins-browser--get "actions" info)))
+         (params-action (cl-find-if (lambda (a)
+                                      (and (hash-table-p a)
+                                           (jenkins-browser--get "parameters" a)))
+                                    (if (listp actions) actions nil)))
+         (params-list (and params-action (jenkins-browser--get "parameters" params-action)))
+         (defaults (when (listp params-list)
+                     (delq nil
+                           (mapcar (lambda (p)
+                                     (when (hash-table-p p)
+                                       (let ((n (jenkins-browser--get "name" p))
+                                             (v (jenkins-browser--get "value" p)))
+                                         (when n (cons n v)))))
+                                   params-list)))))
+    (jenkins-browser-trigger-job jenkins-browser--history-job defaults)))
+
 (defun jenkins-browser-history-open-in-browser (&optional build-num)
   "Open BUILD-NUM in external browser."
   (interactive (list (or (jenkins-browser-current-build-number) (user-error "No build selected"))))
@@ -1201,6 +1237,7 @@ If the build is still running the buffer follows it, see
 (define-key jenkins-browser-build-history-mode-map [return]    #'jenkins-browser-history-view-console)
 (define-key jenkins-browser-build-history-mode-map (kbd "c")   #'jenkins-browser-history-view-console)
 (define-key jenkins-browser-build-history-mode-map (kbd "k")   #'jenkins-browser-history-abort-build)
+(define-key jenkins-browser-build-history-mode-map (kbd "R")   #'jenkins-browser-history-rebuild)
 (define-key jenkins-browser-build-history-mode-map (kbd "o")   #'jenkins-browser-history-open-in-browser)
 
 (define-derived-mode jenkins-browser-build-history-mode tabulated-list-mode "Jenkins-History"

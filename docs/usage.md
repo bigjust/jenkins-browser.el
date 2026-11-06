@@ -77,6 +77,7 @@ are truncated (use `M-x toggle-truncate-lines` or widen the window).
 | Key | Action |
 | --- | --- |
 | `RET`, `c` | Console of the build at point |
+| `R` | Re-trigger build with previous parameters pre-filled |
 | `k` | Abort the build at point (after confirmation) |
 | `o` | Open the build in the browser |
 | `g` | Refresh |
@@ -129,6 +130,7 @@ instances configured in `~/.jenkins_jobs.ini` (e.g. `[jenkins]`, `[staging]`, `[
 | `jenkins-browser-open-folder` | Open the jobs list for a folder path (Lisp function) |
 | `jenkins-browser-toggle-running-filter` | Toggle running-only |
 | `jenkins-browser-trigger-job` | Trigger a job |
+| `jenkins-browser-history-rebuild` | Re-trigger build with previous parameters |
 | `jenkins-browser-view-build-history` | Show a job's builds |
 | `jenkins-browser-view-console` | Show a build's console |
 | `jenkins-browser-abort-build` | Abort a job's last build |

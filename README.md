@@ -14,7 +14,8 @@ JSON support, which every Emacs 30 build has).
 - **Folders and multibranch pipelines**: folders show as `name/` and open with `RET`, to any depth.
 - **Views**: set `jenkins-browser-view-name` to use a Jenkins view as the top-level list.
 - **Running filter**: toggle between all jobs and running jobs only with `f`. Folders always stay visible.
-- **Parameterized triggering**: reads the job's parameter definitions and prompts for each one. Choice parameters use `completing-read`, and defaults are pre-filled.
+- **Parameterized triggering**: reads the job's parameter definitions and prompts for each one. Choice parameters use `completing-read`, password parameters use `read-passwd`, and defaults are pre-filled.
+- **Re-trigger builds (`R`)**: re-run past builds with their historical parameters pre-filled.
 - **Build history**: build number, status, timestamp, **author (culprits)**, duration and **description** for the most recent builds (`jenkins-browser-history-limit`, default 50).
 - **Console viewer**: `^M` characters and Jenkins' hidden console annotations are stripped and the buffer is read-only. Any build can be opened, not just the latest. A running build is **followed live**: new output is fetched in the background and appended.
 - **Abort** the last build from the jobs list, or a specific build from the history.
@@ -90,6 +91,7 @@ All options, including views, timeouts and auto-refresh, are covered in
 | Key | Action |
 | --- | --- |
 | `RET` / `c` | View console output for the build at point |
+| `R` | Re-trigger build with previous parameters pre-filled |
 | `k` | Abort the build at point |
 | `g` | Refresh |
 | `o` | Open build in the browser |

@@ -7,6 +7,7 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- Re-trigger build command (`R` / `jenkins-browser-history-rebuild`) in build history to replay previous runs with historical parameters pre-filled.
 - Multiple Jenkins server profiles support (`M-x jenkins-browser-switch-server`) with interactive switching across sections in `~/.jenkins_jobs.ini`.
 
 ## [0.3.0] - 2026-11-06

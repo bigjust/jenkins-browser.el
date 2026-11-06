@@ -573,6 +573,47 @@ Collect the text of `display-warning' calls in the variable `warnings'."
        (jenkins-browser-trigger-job "deploy-job")
        (should (member "Triggered 'deploy-job' (queue item #789)" messages))))))
 
+(ert-deftest jenkins-browser-test-history-rebuild ()
+  (jenkins-browser-test--with-config
+   (let (calls prompts)
+     (cl-letf (((symbol-function 'jenkins-browser--request)
+                (lambda (_method url &rest _)
+                  (cond
+                   ((string-match-p "/10/api/json" url)
+                    (jenkins-browser-test--json
+                     "{\"actions\":[{\"parameters\":[
+                         {\"name\":\"BRANCH\",\"value\":\"hotfix-1\"},
+                         {\"name\":\"DRY\",\"value\":true}]}]}"))
+                   ((string-suffix-p "/api/json" url)
+                    (jenkins-browser-test--json
+                     "{\"property\":[{\"parameterDefinitions\":[
+                         {\"name\":\"BRANCH\",\"defaultParameterValue\":{\"value\":\"main\"}},
+                         {\"_class\":\"hudson.model.BooleanParameterDefinition\",
+                          \"name\":\"DRY\",\"defaultParameterValue\":{\"value\":false}}]}]}"))
+                   (t ""))))
+               ((symbol-function 'jenkins-browser--http-full)
+                (lambda (method url &optional data type &rest _)
+                  (push (list method url data type) calls)
+                  (cons "" nil)))
+               ((symbol-function 'read-string)
+                (lambda (_prompt _i _k default)
+                  (push (cons "BRANCH" default) prompts)
+                  default))
+               ((symbol-function 'completing-read)
+                (lambda (_prompt _choices _predicate _require-match default &rest _)
+                  (push (cons "DRY" default) prompts)
+                  default)))
+       (with-temp-buffer
+         (jenkins-browser-build-history-mode)
+         (setq jenkins-browser--history-job "myjob")
+         (jenkins-browser-history-rebuild 10))
+       (should (equal (car calls)
+                      '("POST" "https://ci.example.com/job/myjob/buildWithParameters"
+                        "BRANCH=hotfix-1&DRY=true"
+                        "application/x-www-form-urlencoded")))
+       (should (equal (reverse prompts)
+                      '(("BRANCH" . "hotfix-1") ("DRY" . "true"))))))))
+
 (ert-deftest jenkins-browser-test-abort-urls ()
   (jenkins-browser-test--with-config
    (let (calls)

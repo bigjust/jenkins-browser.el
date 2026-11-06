@@ -15,7 +15,7 @@ The file is organised in sections, top to bottom:
 | Core Jenkins queries | `jenkins-browser--jobs-url`, `jenkins-browser--fetch-jobs`, `jenkins-browser--folder-p`, formatting helpers |
 | Refresh handling | `jenkins-browser--refresh-current`, `jenkins-browser--refresh-later`, and the shared auto-refresh timer |
 | Jobs UI | `jenkins-browser--job-entries`, `jenkins-browser-mode`, folder navigation |
-| Build history | `jenkins-browser--fetch-build-history`, `jenkins-browser--history-entries`, `jenkins-browser-build-history-mode` |
+| Build history | `jenkins-browser--fetch-build-history`, `jenkins-browser--history-entries`, `jenkins-browser-build-history-mode`, `jenkins-browser-history-rebuild` |
 | Console | `jenkins-browser-console-mode`, `jenkins-browser-view-console`, and the live-follow functions `jenkins-browser--console-fetch`, `jenkins-browser--console-apply`, `jenkins-browser--console-split` |
 
 ## Concepts
