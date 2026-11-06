@@ -87,6 +87,7 @@ at point. The log opens in `*Jenkins-Console: <job> #<n>*`:
 
 - carriage returns (`^M`) and the hidden annotations Jenkins embeds in the log
   (links, step markers) are removed;
+- ANSI color escape sequences are parsed and displayed using native Emacs faces;
 - the buffer is read-only (`special-mode`), with `q` to close;
 - point starts at the end of the log.
 

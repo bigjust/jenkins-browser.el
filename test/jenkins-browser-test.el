@@ -505,6 +505,14 @@ Collect the text of `display-warning' calls in the variable `warnings'."
   ;; Other ANSI sequences (colours) are left alone.
   (should (equal (jenkins-browser--console-text "\e[31mred\e[0m") "\e[31mred\e[0m")))
 
+(ert-deftest jenkins-browser-test-console-ansi-color-applied ()
+  (with-temp-buffer
+    (jenkins-browser-console-mode)
+    (jenkins-browser--console-insert (encode-coding-string "\e[32mPASS\e[0m\n" 'utf-8))
+    (let ((prop (get-text-property (point-min) 'face))
+          (prop-fl (get-text-property (point-min) 'font-lock-face)))
+      (should (or prop prop-fl)))))
+
 (ert-deftest jenkins-browser-test-console-split ()
   (should (equal (jenkins-browser--console-split "a\nb\nc" nil) '("a\nb\n" . "c")))
   (should (equal (jenkins-browser--console-split "a\nb\n" nil) '("a\nb\n" . "")))

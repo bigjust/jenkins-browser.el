@@ -77,7 +77,8 @@ Things that are easy to get wrong:
   `jenkins-browser--console-split` cuts it at the last newline and keeps the rest in
   `jenkins-browser--console-pending`, so neither a line, an annotation nor a multibyte
   character is ever split between two requests. Only the complete part is
-  decoded (`jenkins-browser--decode`) and cleaned (`jenkins-browser--console-text`).
+  decoded (`jenkins-browser--decode`), cleaned (`jenkins-browser--console-text`),
+  and styled with ANSI colors (`ansi-color-apply`).
 - **Stale answers are dropped.** An answer whose request started at an older
   offset than the buffer now has is ignored.
 - `lastBuild` is resolved to a build number when the console is opened, so

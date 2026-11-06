@@ -54,6 +54,7 @@
 (require 'cl-lib)
 (require 'find-func)
 (require 'auth-source)
+(require 'ansi-color)
 
 (defgroup jenkins-browser nil
   "Interact with Jenkins from Emacs."
@@ -875,10 +876,13 @@ Windows and point that were at the end of the buffer stay there."
                     (lambda (w) (= (window-point w) (point-max)))
                     (get-buffer-window-list (current-buffer) nil t)))
           (at-end (= (point) (point-max)))
-          (inhibit-read-only t))
+          (inhibit-read-only t)
+          (text (ansi-color-apply
+                 (jenkins-browser--console-text
+                  (jenkins-browser--decode bytes)))))
       (save-excursion
         (goto-char (point-max))
-        (insert (jenkins-browser--console-text (jenkins-browser--decode bytes))))
+        (insert text))
       (when at-end
         (goto-char (point-max)))
       (dolist (w windows)
