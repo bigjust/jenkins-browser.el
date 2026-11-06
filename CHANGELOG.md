@@ -3,7 +3,9 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## Unreleased
+## [Unreleased]
+
+## [0.3.0] - 2026-11-06
 
 ### Changed
 
@@ -38,7 +40,7 @@ All notable changes to this project are documented here. The format follows
 
 - Boolean job parameters are sent as `true`/`false`.
 
-## 0.2.0 - 2026-11-03
+## [0.2.0] - 2026-11-03
 
 ### Added
 
@@ -55,8 +57,13 @@ All notable changes to this project are documented here. The format follows
 - HTTP errors are signalled as Emacs errors, responses are decoded as UTF-8,
   and requests have a timeout.
 
-## 0.1.0 - 2026-11-03
+## [0.1.0] - 2026-11-03
 
 - Initial version: list jobs with a running-only filter, trigger jobs
   (including parameterized ones), view a build's console, abort builds and open
   jobs in the browser, reading credentials from `~/.jenkins_jobs.ini`.
+
+[Unreleased]: https://github.com/bigjust/jenkins-browser.el/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/bigjust/jenkins-browser.el/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/bigjust/jenkins-browser.el/commit/4284f3e
+[0.1.0]: https://github.com/bigjust/jenkins-browser.el/commit/1e77501
