@@ -36,7 +36,7 @@ build number, and the buffer-local `jenkins--history-job` holds the full job pat
 
 ### HTTP layer
 
-- `jenkins--http` does the request and returns the response body as a UTF-8 decoded string. It signals an error for status >= 400 and for an empty response.
+- `jenkins--http` does the request and returns the response body as a UTF-8 decoded string. It signals an error for status >= 400. An empty body is returned as `""`, which is what a successful `POST` to `/build` gives.
 - `jenkins--request` calls it and tries to parse JSON (hash-tables, lists, `nil` for null and false). If parsing fails, it returns the raw body, which is how console text and empty POST responses are handled.
 - For `POST`, `PUT` and `DELETE` it first fetches a CSRF crumb from `/crumbIssuer/api/json` and sends it as a header. If the crumb endpoint is missing, the request goes ahead without one.
 - Requests are **synchronous** (`url-retrieve-synchronously`) with `jenkins-request-timeout`.
