@@ -484,7 +484,7 @@ GET is supported, so no CSRF crumb is involved."
   "Convert MILLIS to a human-readable duration."
   (if (or (null millis) (not (numberp millis)) (<= millis 0))
       "-"
-    (let* ((secs (/ millis 1000))
+    (let* ((secs (truncate (/ millis 1000.0)))
            (mins (/ secs 60))
            (hours (/ mins 60)))
       (cond
