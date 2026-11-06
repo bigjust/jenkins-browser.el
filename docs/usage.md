@@ -84,12 +84,26 @@ are truncated (use `M-x toggle-truncate-lines` or widen the window).
 `c` in the jobs list shows the latest build. In the history it shows the build
 at point. The log opens in `*Jenkins-Console: <job> #<n>*`:
 
-- carriage returns (`^M`) are removed;
+- carriage returns (`^M`) and the hidden annotations Jenkins embeds in the log
+  (links, step markers) are removed;
 - the buffer is read-only (`special-mode`), with `q` to close;
 - point starts at the end of the log.
 
-The console is fetched once. It is not a live tail, so press `c` again to
-reload a running build.
+A running build is followed live. The mode line shows `follow`, and every
+`jenkins-console-poll-interval` seconds (default 2) the new part of the log is
+fetched in the background and appended. Only whole lines are shown, so a line
+never appears half written. If point is at the end of the buffer it keeps
+following the output, and if you have scrolled up, the buffer leaves your
+position alone. Following stops by itself when the build finishes.
+
+| Key | Action |
+| --- | --- |
+| `f` | Stop or resume following |
+| `g` | Fetch new output now (also useful after following stopped on an error) |
+| `q` | Quit window |
+
+`c` on `lastBuild` opens the console of the build that is the latest at that
+moment, and keeps following that build even if a newer one starts.
 
 ### Aborting (`k`)
 

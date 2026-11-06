@@ -64,7 +64,12 @@ triggered or timer-triggered builds with no new commits have none.
 
 ## Console is truncated or empty for a running build
 
-The console is fetched once per request. Press `c` again to reload it.
+Running builds are followed live, so the console grows by itself; the mode
+line shows `follow` while it is active. If it stops (for example after a
+network error, which is reported in the echo area), press `f` to resume
+following or `g` to fetch new output once. Output appears a whole line at a
+time, so a long-running step that prints no newline shows nothing until it
+ends the line. `c` on a build that has finished always shows its full log.
 
 ## Description column is "-" or cut off
 

@@ -223,24 +223,44 @@ cleared.  Return nil when the server does not issue crumbs."
           (setq jenkins--crumb-cache (cons key crumb)))
         crumb))))
 
+(defun jenkins--parse-headers ()
+  "Return the HTTP response headers in the current buffer as an alist.
+Header names are downcased, so they can be looked up with `assoc'
+whatever capitalisation the server uses."
+  (save-excursion
+    (goto-char (point-min))
+    (forward-line 1)
+    (let (headers)
+      (while (looking-at "\\([^:\n\r]+\\):[ \t]*\\(.*?\\)\r?$")
+        (push (cons (downcase (match-string 1)) (match-string 2)) headers)
+        (forward-line 1))
+      (nreverse headers))))
+
 (defun jenkins--parse-response ()
-  "Return (STATUS . BODY) for the HTTP response in the current buffer.
-STATUS is the HTTP status code or nil.  BODY is decoded as UTF-8."
-  (let ((status (bound-and-true-p url-http-response-status)))
+  "Return (STATUS BODY HEADERS) for the HTTP response in the current buffer.
+STATUS is the HTTP status code or nil.  BODY is the undecoded body, see
+`jenkins--decode'.  HEADERS is an alist as returned by
+`jenkins--parse-headers'."
+  (let ((status (bound-and-true-p url-http-response-status))
+        (headers (jenkins--parse-headers)))
     (goto-char (point-min))
     (re-search-forward "^$" nil t)
     (unless (eobp)
       (forward-char 1))
-    (cons status
-          (decode-coding-string
-           (buffer-substring-no-properties (point) (point-max))
-           'utf-8))))
+    (list status
+          (buffer-substring-no-properties (point) (point-max))
+          headers)))
+
+(defun jenkins--decode (bytes)
+  "Decode the undecoded response body BYTES as UTF-8."
+  (decode-coding-string bytes 'utf-8))
 
 (defun jenkins--send (method url-str post-data content-type crumb)
-  "Perform a synchronous HTTP request; return (STATUS . BODY).
+  "Perform a synchronous HTTP request; return (STATUS BODY HEADERS).
 METHOD, URL-STR, POST-DATA and CONTENT-TYPE are as for `jenkins--http'.
-CRUMB is a cons (HEADER . VALUE) to send as a header, or nil.  BODY is
-decoded as UTF-8.  Never signal an error because of the HTTP status."
+CRUMB is a cons (HEADER . VALUE) to send as a header, or nil.  The body
+is returned undecoded, see `jenkins--parse-response'.  Never signal an
+error because of the HTTP status."
   (let* ((auth (jenkins--auth-header))
          (url-request-method method)
          (url-request-extra-headers
@@ -257,24 +277,34 @@ decoded as UTF-8.  Never signal an error because of the HTTP status."
           (jenkins--parse-response)
         (kill-buffer buf)))))
 
-(defun jenkins--http (method url-str &optional post-data content-type)
-  "Perform a synchronous HTTP request and return the response body string.
+(defun jenkins--http-full (method url-str &optional post-data content-type raw)
+  "Perform a synchronous HTTP request; return (BODY . HEADERS).
 METHOD is the HTTP verb and URL-STR the target.  POST-DATA and CONTENT-TYPE
-are sent with the request when non-nil.  A CSRF crumb is attached to
-state-changing methods; it is cached, and if the server rejects the
-request with HTTP 403 the crumb is refreshed and the request retried once.
-Signal an error on HTTP status 400 or above."
+are sent with the request when non-nil.  BODY is the response body string,
+decoded as UTF-8 unless RAW is non-nil, and HEADERS the response headers,
+see `jenkins--parse-headers'.  A CSRF
+crumb is attached to state-changing methods; it is cached, and if the
+server rejects the request with HTTP 403 the crumb is refreshed and the
+request retried once.  Signal an error on HTTP status 400 or above."
   (let* ((state-changing (member method '("POST" "PUT" "DELETE")))
          (crumb (and state-changing (jenkins--crumb)))
          (resp (jenkins--send method url-str post-data content-type crumb)))
-    (when (and crumb (eql (car resp) 403))
+    (when (and crumb (eql (nth 0 resp) 403))
       (setq jenkins--crumb-cache nil)
       (let ((fresh (jenkins--crumb)))
         (when (and fresh (not (equal fresh crumb)))
           (setq resp (jenkins--send method url-str post-data content-type fresh)))))
-    (when (and (integerp (car resp)) (>= (car resp) 400))
-      (error "Jenkins returned HTTP %d for %s" (car resp) url-str))
-    (cdr resp)))
+    (when (and (integerp (nth 0 resp)) (>= (nth 0 resp) 400))
+      (error "Jenkins returned HTTP %d for %s" (nth 0 resp) url-str))
+    (cons (if raw (nth 1 resp) (jenkins--decode (nth 1 resp)))
+          (nth 2 resp))))
+
+(defun jenkins--http (method url-str &optional post-data content-type)
+  "Perform a synchronous HTTP request and return the response body string.
+METHOD, URL-STR, POST-DATA and CONTENT-TYPE are as for `jenkins--http-full',
+which also describes the CSRF crumb handling.  Signal an error on HTTP
+status 400 or above."
+  (car (jenkins--http-full method url-str post-data content-type)))
 
 (defun jenkins--parse-json (body)
   "Parse BODY as JSON into hash-tables and lists, or return BODY unchanged.
@@ -292,11 +322,13 @@ JSON null and false both become nil."
 METHOD, URL-STR, POST-DATA and CONTENT-TYPE are as for `jenkins--http'."
   (jenkins--parse-json (jenkins--http method url-str post-data content-type)))
 
-(defun jenkins--request-async (url-str callback)
+(defun jenkins--request-async (url-str callback &optional raw)
   "Send a GET request to URL-STR without blocking Emacs.
 CALLBACK is called exactly once, with arguments (RESULT ERROR).  On
 success RESULT is the parsed JSON or raw body, as for `jenkins--request',
-and ERROR is nil.  On failure (connection problem, HTTP status 400 or
+and ERROR is nil.  With RAW non-nil, RESULT is instead the plist
+\(:body STRING :headers ALIST), where the body is neither decoded nor
+parsed.  On failure (connection problem, HTTP status 400 or
 above, or `jenkins-request-timeout' seconds without an answer) RESULT is
 nil and ERROR is a message string.  Only GET is supported, so no CSRF
 crumb is involved."
@@ -324,7 +356,7 @@ crumb is involved."
                (let ((resp-buf (current-buffer)))
                  (unwind-protect
                      (let* ((resp (jenkins--parse-response))
-                            (code (car resp)))
+                            (code (nth 0 resp)))
                        (cond
                         ((and (integerp code) (>= code 400))
                          (finish nil (format "Jenkins returned HTTP %d for %s"
@@ -334,7 +366,11 @@ crumb is involved."
                                              (plist-get status :error))))
                         ((not (integerp code))
                          (finish nil (format "No response from Jenkins for %s" url-str)))
-                        (t (finish (jenkins--parse-json (cdr resp)) nil))))
+                        (t (finish (if raw
+                                       (list :body (nth 1 resp) :headers (nth 2 resp))
+                                     (jenkins--parse-json
+                                      (jenkins--decode (nth 1 resp))))
+                                   nil))))
                    (when (buffer-live-p resp-buf)
                      (kill-buffer resp-buf)))))
              nil t t))
@@ -707,28 +743,221 @@ JOB is a slash-separated path such as \"folder/job\"."
         (message "Triggered '%s' with parameters." job)))
     (jenkins--refresh-later)))
 
+(defcustom jenkins-console-poll-interval 2
+  "Seconds between requests for new output while following a running build."
+  :type 'number
+  :group 'jenkins)
+
+(defvar-local jenkins--console-job nil
+  "Slash-separated path of the job whose console this buffer shows.")
+
+(defvar-local jenkins--console-build nil
+  "Number (as a string) of the build whose console this buffer shows.")
+
+(defvar-local jenkins--console-offset 0
+  "Byte offset in the build log of the first byte not yet fetched.")
+
+(defvar-local jenkins--console-pending ""
+  "Undecoded unfinished last line of the log, held back until it is complete.")
+
+(defvar-local jenkins--console-more-data nil
+  "Non-nil if Jenkins said the build may still write more output.")
+
+(defvar-local jenkins--console-in-flight nil
+  "Non-nil while a request for more output is waiting for Jenkins.")
+
+(defvar-local jenkins--console-timer nil
+  "Timer polling for new output while following the build, or nil.")
+
 (define-derived-mode jenkins-console-mode special-mode "Jenkins-Console"
   "Major mode for viewing a Jenkins console log.
+While the build is running the buffer follows it, fetching new output
+every `jenkins-console-poll-interval' seconds.
 
-\\{jenkins-console-mode-map}")
+\\{jenkins-console-mode-map}"
+  (add-hook 'kill-buffer-hook #'jenkins--console-stop-follow nil t))
+
+(defconst jenkins--console-note-regexp
+  "\r\\|\e\\[8mha:[A-Za-z0-9+/=]*\e\\[0m"
+  "Match what is removed from console text.
+That is carriage returns and the hidden `ConsoleNote' annotations that
+Jenkins mixes into the progressive log.")
 
 (defun jenkins--console-text (text)
-  "Strip CR characters from console TEXT."
-  (replace-regexp-in-string "\r" "" text))
+  "Strip CR characters and Jenkins console annotations from console TEXT."
+  (replace-regexp-in-string jenkins--console-note-regexp "" text))
+
+(defun jenkins--console-split (bytes final)
+  "Split the undecoded log text BYTES into (COMPLETE . REST).
+COMPLETE ends at the last newline, so that no line, annotation or
+multibyte character is cut in half.  REST is the unfinished last line,
+to be put in front of the next chunk.  When FINAL is non-nil the log is
+complete and REST is empty."
+  (if final
+      (cons bytes "")
+    (let ((i (length bytes)))
+      (while (and (> i 0) (/= (aref bytes (1- i)) ?\n))
+        (setq i (1- i)))
+      (cons (substring bytes 0 i) (substring bytes i)))))
+
+(defun jenkins--console-insert (bytes)
+  "Append the undecoded log text BYTES to the current console buffer.
+Windows and point that were at the end of the buffer stay there."
+  (when (> (length bytes) 0)
+    (let ((windows (cl-remove-if-not
+                    (lambda (w) (= (window-point w) (point-max)))
+                    (get-buffer-window-list (current-buffer) nil t)))
+          (at-end (= (point) (point-max)))
+          (inhibit-read-only t))
+      (save-excursion
+        (goto-char (point-max))
+        (insert (jenkins--console-text (jenkins--decode bytes))))
+      (when at-end
+        (goto-char (point-max)))
+      (dolist (w windows)
+        (set-window-point w (point-max))))))
+
+(defun jenkins--console-url (job build offset)
+  "Return the URL of the log of BUILD of JOB from byte OFFSET on."
+  (jenkins--job-url job (format "/%s/logText/progressiveText?start=%d"
+                                build offset)))
+
+(defun jenkins--console-apply (body headers)
+  "Add the undecoded log chunk BODY, with response HEADERS, to the buffer.
+Move the fetch offset on and remember whether the build is still running.
+Stop following when Jenkins reports that there is no more data."
+  (let* ((size (cdr (assoc "x-text-size" headers)))
+         (more (equal (cdr (assoc "x-more-data" headers)) "true"))
+         (split (jenkins--console-split (concat jenkins--console-pending body)
+                                        (not more))))
+    (setq jenkins--console-offset (if size
+                                      (string-to-number size)
+                                    (+ jenkins--console-offset (length body)))
+          jenkins--console-pending (cdr split)
+          jenkins--console-more-data more)
+    (jenkins--console-insert (car split))
+    (unless more
+      (jenkins--console-stop-follow))))
+
+(defun jenkins--console-fetch ()
+  "Fetch the next part of the log of the current console buffer.
+The request is sent in the background.  Do nothing if one is already
+under way.  On failure, report it and stop following."
+  (unless jenkins--console-in-flight
+    (let* ((buf (current-buffer))
+           (offset jenkins--console-offset)
+           (url (jenkins--console-url jenkins--console-job
+                                      jenkins--console-build offset)))
+      (setq jenkins--console-in-flight t)
+      (condition-case err
+          (jenkins--request-async
+           url
+           (lambda (resp error-message)
+             (when (buffer-live-p buf)
+               (with-current-buffer buf
+                 (setq jenkins--console-in-flight nil)
+                 (cond
+                  (error-message
+                   (jenkins--console-stop-follow)
+                   (message "jenkins console: %s; press f to resume following"
+                            error-message))
+                  ;; The buffer was reloaded while this request was away.
+                  ((/= offset jenkins--console-offset))
+                  (t (jenkins--console-apply (plist-get resp :body)
+                                             (plist-get resp :headers)))))))
+           t)
+        (error
+         (setq jenkins--console-in-flight nil)
+         (signal (car err) (cdr err)))))))
+
+(defun jenkins--console-start-follow ()
+  "Start polling for new output in the current console buffer."
+  (unless (timerp jenkins--console-timer)
+    (let* ((buf (current-buffer))
+           (interval jenkins-console-poll-interval)
+           timer)
+      (setq timer
+            (run-at-time
+             interval interval
+             (lambda ()
+               (if (and (buffer-live-p buf)
+                        (eq (buffer-local-value 'jenkins--console-timer buf)
+                            timer))
+                   (with-current-buffer buf
+                     (jenkins--console-fetch))
+                 (cancel-timer timer)))))
+      (setq jenkins--console-timer timer
+            mode-line-process " follow")
+      (force-mode-line-update))))
+
+(defun jenkins--console-stop-follow ()
+  "Stop polling for new output in the current console buffer."
+  (when (timerp jenkins--console-timer)
+    (cancel-timer jenkins--console-timer))
+  (setq jenkins--console-timer nil
+        mode-line-process nil)
+  (force-mode-line-update))
+
+(defun jenkins-console-refresh ()
+  "Fetch any new output of the build shown in this console buffer."
+  (interactive)
+  (if jenkins--console-more-data
+      (jenkins--console-fetch)
+    (message "The build has finished; there is no more output")))
+
+(defun jenkins-console-toggle-follow ()
+  "Start or stop following the build shown in this console buffer."
+  (interactive)
+  (cond
+   ((timerp jenkins--console-timer)
+    (jenkins--console-stop-follow)
+    (message "Stopped following the build"))
+   ((not jenkins--console-more-data)
+    (message "The build has finished; there is nothing to follow"))
+   (t
+    (jenkins--console-start-follow)
+    (jenkins--console-fetch)
+    (message "Following the build"))))
+
+(define-key jenkins-console-mode-map (kbd "g") #'jenkins-console-refresh)
+(define-key jenkins-console-mode-map (kbd "f") #'jenkins-console-toggle-follow)
+
+(defun jenkins--resolve-build (job build-id)
+  "Return the number, as a string, of the build BUILD-ID of JOB.
+BUILD-ID may be \"lastBuild\", which moves on when a new build starts."
+  (if (string-match-p "\\`[0-9]+\\'" build-id)
+      build-id
+    (let* ((info (jenkins--request
+                  "GET" (jenkins--job-url
+                         job (format "/%s/api/json?tree=number" build-id))))
+           (number (jenkins--get "number" info)))
+      (unless number
+        (error "Jenkins has no %s for %s" build-id job))
+      (format "%s" number))))
 
 (defun jenkins-view-console (job &optional build-number)
-  "View the console log for BUILD-NUMBER (default \"lastBuild\") of JOB."
+  "View the console log for BUILD-NUMBER (default \"lastBuild\") of JOB.
+If the build is still running the buffer follows it, see
+`jenkins-console-toggle-follow'."
   (interactive (list (jenkins--read-job "Console for job: ")))
-  (let* ((build-id (or (and build-number (format "%s" build-number)) "lastBuild"))
-         (output (jenkins--http "GET" (jenkins--job-url job (format "/%s/consoleText" build-id))))
-         (buf (get-buffer-create (format "*Jenkins-Console: %s #%s*" job build-id))))
-    (with-current-buffer buf
-      (jenkins-console-mode)
-      (let ((inhibit-read-only t))
-        (erase-buffer)
-        (insert (jenkins--console-text output)))
-      (goto-char (point-max)))
-    (pop-to-buffer buf)))
+  (let ((build-id (or (and build-number (format "%s" build-number)) "lastBuild")))
+    (jenkins--open-buffer
+     (format "*Jenkins-Console: %s #%s*" job build-id)
+     (lambda ()
+       (jenkins--console-stop-follow)
+       (let ((build (jenkins--resolve-build job build-id)))
+         (let ((resp (jenkins--http-full
+                      "GET" (jenkins--console-url job build 0) nil nil t)))
+           (jenkins-console-mode)
+           (setq jenkins--console-job job
+                 jenkins--console-build build)
+           (let ((inhibit-read-only t))
+             (erase-buffer))
+           (jenkins--console-apply (car resp) (cdr resp))
+           (goto-char (point-max))
+           (when jenkins--console-more-data
+             (jenkins--console-start-follow)))))
+     #'pop-to-buffer)))
 
 (defun jenkins-abort-build (job)
   "Abort the running build for JOB."

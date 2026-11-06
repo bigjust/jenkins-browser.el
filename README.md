@@ -16,7 +16,7 @@ JSON support, which every Emacs 30 build has).
 - **Running filter**: toggle between all jobs and running jobs only with `f`. Folders always stay visible.
 - **Parameterized triggering**: reads the job's parameter definitions and prompts for each one. Choice parameters use `completing-read`, and defaults are pre-filled.
 - **Build history**: build number, status, timestamp, **author (culprits)**, duration and **description** for the most recent builds (`jenkins-history-limit`, default 50).
-- **Console viewer**: `^M` characters are stripped and the buffer is read-only. Any build can be opened, not just the latest.
+- **Console viewer**: `^M` characters and Jenkins' hidden console annotations are stripped and the buffer is read-only. Any build can be opened, not just the latest. A running build is **followed live**: new output is fetched in the background and appended.
 - **Abort** the last build from the jobs list, or a specific build from the history.
 - **CSRF crumbs** are handled automatically on `POST`.
 - **HTTP errors** (401, 403, 404, ...) show up as Emacs errors rather than being parsed as data.
@@ -89,7 +89,15 @@ All options, including views, timeouts and auto-refresh, are covered in
 
 ### Console (`*Jenkins-Console: <job> #<n>*`)
 
-A read-only `special-mode` buffer: `q` quits, `SPC` / `DEL` scroll.
+A read-only `special-mode` buffer: `q` quits, `SPC` / `DEL` scroll. For a
+running build the mode line shows `follow` and new output is appended every
+`jenkins-console-poll-interval` seconds.
+
+| Key | Action |
+| --- | --- |
+| `f` | Start or stop following the build |
+| `g` | Fetch new output now |
+| `q` | Quit window |
 
 ## Documentation
 

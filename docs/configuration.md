@@ -56,6 +56,7 @@ Customize with `M-x customize-group RET jenkins`.
 | `jenkins-auto-refresh-interval` | `nil` | Seconds between automatic refreshes, or `nil`/`0` to disable. See below. |
 | `jenkins-request-timeout` | `30` | Timeout in seconds for each HTTP request. |
 | `jenkins-history-limit` | `50` | Maximum number of builds in a history buffer. |
+| `jenkins-console-poll-interval` | `2` | Seconds between requests for new output while following a running build. |
 | `jenkins-folder-class-regexp` | `"Folder\\|MultiBranchProject"` | Jobs whose Jenkins `_class` matches are treated as folders. |
 
 ### Views

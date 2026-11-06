@@ -354,19 +354,341 @@
        (should (member '("POST" . "https://ci.example.com/job/f/job/j/lastBuild/stop") calls))
        (should (member '("POST" . "https://ci.example.com/job/f/job/j/12/stop") calls))))))
 
-(ert-deftest jenkins-test-view-console-strips-cr ()
+(ert-deftest jenkins-test-console-text-strips-notes ()
+  (should (equal (jenkins--console-text "a\r\nb\r\n") "a\nb\n"))
+  (should (equal (jenkins--console-text "x\e[8mha:////4AAA+/=\e[0mfoo\r\n") "xfoo\n"))
+  ;; Other ANSI sequences (colours) are left alone.
+  (should (equal (jenkins--console-text "\e[31mred\e[0m") "\e[31mred\e[0m")))
+
+(ert-deftest jenkins-test-console-split ()
+  (should (equal (jenkins--console-split "a\nb\nc" nil) '("a\nb\n" . "c")))
+  (should (equal (jenkins--console-split "a\nb\n" nil) '("a\nb\n" . "")))
+  (should (equal (jenkins--console-split "abc" nil) '("" . "abc")))
+  (should (equal (jenkins--console-split "" nil) '("" . "")))
+  (should (equal (jenkins--console-split "a\nb" t) '("a\nb" . ""))))
+
+(ert-deftest jenkins-test-parse-headers ()
+  (with-temp-buffer
+    (insert "HTTP/1.1 200 OK\r\nX-Text-Size: 42\r\nx-more-data:true\r\n"
+            "Content-Type: text/plain; charset=utf-8\r\n\r\nbody: not a header\r\n")
+    (let ((h (jenkins--parse-headers)))
+      (should (equal (cdr (assoc "x-text-size" h)) "42"))
+      (should (equal (cdr (assoc "x-more-data" h)) "true"))
+      (should (equal (cdr (assoc "content-type" h)) "text/plain; charset=utf-8"))
+      (should (= (length h) 3))))
+  (with-temp-buffer
+    (insert "HTTP/1.1 204 No Content\n\n")
+    (should (null (jenkins--parse-headers)))))
+
+;;; Console
+
+(defun jenkins-test--log-server (log &optional chunks)
+  "Return a stand-in for `url-retrieve-synchronously' and `url-retrieve'.
+It serves the unibyte string LOG as a Jenkins progressive log.  CHUNKS is a
+list of byte counts: the Nth request sees only that much of the log, and
+the last entry (or the whole log) ends the stream.  The requested start
+offsets are collected in `jenkins-test--log-starts'."
+  (let ((n 0))
+    (lambda (url &rest _)
+      (cond
+       ((string-match "/api/json\\?tree=number" url)
+        (jenkins-test--response-buffer 200 "{\"number\":7}"))
+       (t
+        (string-match "start=\\([0-9]+\\)" url)
+        (let* ((start (string-to-number (match-string 1 url)))
+               (limit (nth (min n (1- (length chunks))) chunks))
+               (end (if chunks (min limit (length log)) (length log)))
+               (more (and chunks (< n (1- (length chunks)))))
+               (buf (generate-new-buffer " *jenkins-test-log*")))
+          (setq n (1+ n))
+          (push start jenkins-test--log-starts)
+          (with-current-buffer buf
+            (set-buffer-multibyte nil)
+            (insert (format "HTTP/1.1 200 OK\nX-Text-Size: %d\n%sContent-Type: text/plain\n\n"
+                            end (if more "X-More-Data: true\n" "")))
+            (insert (substring log (min start end) end))
+            (setq-local url-http-response-status 200))
+          buf))))))
+
+(defvar jenkins-test--log-starts nil
+  "Start offsets requested from the stubbed log server, newest first.")
+
+(defun jenkins-test--view-console (log chunks &optional build)
+  "Open the console of BUILD (default 7) with LOG served in CHUNKS.
+Return the console buffer.  The caller kills it."
+  (let ((stub (jenkins-test--log-server log chunks)))
+    (cl-letf (((symbol-function 'url-retrieve-synchronously) stub)
+              ((symbol-function 'url-retrieve)
+               (lambda (url callback &rest _)
+                 (let ((buf (funcall stub url)))
+                   (with-current-buffer buf (funcall callback nil))
+                   buf)))
+              ((symbol-function 'pop-to-buffer) #'ignore))
+      (jenkins-view-console "f/j" (or build 7)))
+    (get-buffer (format "*Jenkins-Console: f/j #%s*" (or build 7)))))
+
+(defmacro jenkins-test--with-console (var log chunks &rest body)
+  "Open a console on LOG served in CHUNKS, bind it to VAR, and run BODY.
+`url-retrieve' is stubbed while BODY runs, and the buffer is killed after."
+  (declare (indent 3))
+  `(let* ((jenkins-test--log-starts nil)
+          (,var (jenkins-test--view-console ,log ,chunks)))
+     (unwind-protect
+         (with-current-buffer ,var ,@body)
+       (when (buffer-live-p ,var) (kill-buffer ,var)))))
+
+(defmacro jenkins-test--with-log-stub (log chunks &rest body)
+  "Run BODY with `url-retrieve' serving LOG in CHUNKS, answering at once."
+  (declare (indent 2))
+  `(let ((stub (jenkins-test--log-server ,log ,chunks)))
+     (cl-letf (((symbol-function 'url-retrieve)
+                (lambda (url callback &rest _)
+                  (let ((buf (funcall stub url)))
+                    (with-current-buffer buf (funcall callback nil))
+                    buf))))
+       ,@body)))
+
+(ert-deftest jenkins-test-view-console-finished-build ()
   (jenkins-test--with-config
-   (cl-letf (((symbol-function 'jenkins--http)
-              (lambda (&rest _) "line1\r\nline2\r\n"))
+   (jenkins-test--with-console buf "line1\r\nline2\r\n" nil
+     (should (equal (buffer-string) "line1\nline2\n"))
+     (should (derived-mode-p 'jenkins-console-mode))
+     (should buffer-read-only)
+     (should (null jenkins--console-timer))
+     (should (null jenkins--console-more-data))
+     (should (= jenkins--console-offset 14))
+     (should (= (point) (point-max)))
+     (should (equal jenkins-test--log-starts '(0))))))
+
+(ert-deftest jenkins-test-view-console-strips-annotations ()
+  (jenkins-test--with-config
+   (jenkins-test--with-console buf "a\e[8mha:////4QQ+/==\e[0mb\r\n" nil
+     (should (equal (buffer-string) "ab\n")))))
+
+(ert-deftest jenkins-test-view-console-resolves-last-build ()
+  (jenkins-test--with-config
+   (let ((stub (jenkins-test--log-server "x\n" nil))
+         (jenkins-test--log-starts nil) urls)
+     (cl-letf (((symbol-function 'url-retrieve-synchronously)
+                (lambda (url &rest r) (push url urls) (apply stub url r)))
+               ((symbol-function 'pop-to-buffer) #'ignore))
+       (jenkins-view-console "f/j"))
+     (unwind-protect
+         (with-current-buffer "*Jenkins-Console: f/j #lastBuild*"
+           (should (equal jenkins--console-build "7"))
+           (should (cl-some (lambda (u) (string-match-p "/job/f/job/j/7/logText/progressiveText\\?start=0" u))
+                            urls))
+           (should (cl-some (lambda (u) (string-match-p "/lastBuild/api/json\\?tree=number" u))
+                            urls)))
+       (kill-buffer "*Jenkins-Console: f/j #lastBuild*")))))
+
+(ert-deftest jenkins-test-view-console-running-build-follows ()
+  (jenkins-test--with-config
+   (let ((jenkins-console-poll-interval 600))
+     (jenkins-test--with-console buf "one\ntwo\nthree\n" '(8 14)
+       (should (equal (buffer-string) "one\ntwo\n"))
+       (should jenkins--console-more-data)
+       (should (timerp jenkins--console-timer))
+       (should (equal mode-line-process " follow"))
+       (should (= jenkins--console-offset 8))
+       ;; The next poll fetches from the stored offset and finishes the log.
+       (jenkins-test--with-log-stub "one\ntwo\nthree\n" '(14)
+         (jenkins--console-fetch))
+       (should (equal (buffer-string) "one\ntwo\nthree\n"))
+       (should (null jenkins--console-more-data))
+       (should (null jenkins--console-timer))
+       (should (null mode-line-process))))))
+
+(ert-deftest jenkins-test-console-holds-back-partial-lines ()
+  (jenkins-test--with-config
+   (let ((jenkins-console-poll-interval 600)
+         (log "alpha\nbeta gamma\ndelta\n"))
+     ;; Cut mid-"beta gamma" (after "beta"), then after the "d" of "delta".
+     (jenkins-test--with-console buf log '(10 18 24)
+       (should (equal (buffer-string) "alpha\n"))
+       (should (equal jenkins--console-pending "beta"))
+       (should (= jenkins--console-offset 10))
+       (jenkins-test--with-log-stub log '(18 24)
+         (jenkins--console-fetch)
+         (should (equal (buffer-string) "alpha\nbeta gamma\n"))
+         (should (equal jenkins--console-pending "d"))
+         (should jenkins--console-timer)
+         (jenkins--console-fetch)
+         (should (equal (buffer-string) "alpha\nbeta gamma\ndelta\n"))
+         (should (equal jenkins--console-pending ""))
+         (should (null jenkins--console-timer)))))))
+
+(ert-deftest jenkins-test-console-does-not-cut-multibyte-characters ()
+  (jenkins-test--with-config
+   (let* ((jenkins-console-poll-interval 600)
+          (log (encode-coding-string "caf\u00e9 \u2713 ok\nnext\n" 'utf-8))
+          (cut (+ 3 1)))                ; between the two bytes of \u00e9
+     (jenkins-test--with-console buf log (list cut (length log))
+       (should (equal (buffer-string) ""))
+       (jenkins-test--with-log-stub log (list (length log))
+         (jenkins--console-fetch))
+       (should (equal (buffer-string) "caf\u00e9 \u2713 ok\nnext\n"))))))
+
+(ert-deftest jenkins-test-console-offset-comes-from-text-size-header ()
+  ;; With annotations the body is longer than the log offset it covers
+  ;; (the real server answers 3416 bytes for X-Text-Size: 3382).
+  (jenkins-test--with-config
+   (let ((jenkins-console-poll-interval 600))
+     (jenkins-test--with-console buf "a\n" '(2 2)
+       (jenkins--console-apply "one\ntwo\n" '(("x-text-size" . "5")
+                                                ("x-more-data" . "true")))
+       (should (= jenkins--console-offset 5))
+       (should (equal (buffer-string) "a\none\ntwo\n"))
+       ;; Without the header, fall back to counting the bytes received.
+       (jenkins--console-apply "x\n" '(("x-more-data" . "true")))
+       (should (= jenkins--console-offset 7))))))
+
+(ert-deftest jenkins-test-console-final-chunk-flushes-unfinished-line ()
+  (jenkins-test--with-config
+   (jenkins-test--with-console buf "no newline at end" nil
+     (should (equal (buffer-string) "no newline at end")))))
+
+(ert-deftest jenkins-test-console-keeps-reading-position ()
+  (jenkins-test--with-config
+   (let ((jenkins-console-poll-interval 600)
+         (log "1\n2\n3\n4\n"))
+     (jenkins-test--with-console buf log '(4 8)
+       (goto-char (point-min))
+       (jenkins-test--with-log-stub log '(8)
+         (jenkins--console-fetch))
+       (should (equal (buffer-string) "1\n2\n3\n4\n"))
+       (should (= (point) (point-min)))))))
+
+(ert-deftest jenkins-test-console-follows-point-at-end ()
+  (jenkins-test--with-config
+   (let ((jenkins-console-poll-interval 600)
+         (log "1\n2\n3\n4\n"))
+     (jenkins-test--with-console buf log '(4 8)
+       (should (= (point) (point-max)))
+       (jenkins-test--with-log-stub log '(8)
+         (jenkins--console-fetch))
+       (should (= (point) (point-max)))))))
+
+(ert-deftest jenkins-test-console-fetch-skips-while-in-flight ()
+  (jenkins-test--with-config
+   (let ((jenkins-console-poll-interval 600) (calls 0) pending)
+     (jenkins-test--with-console buf "a\nb\n" '(2 4)
+       (cl-letf (((symbol-function 'jenkins--request-async)
+                  (lambda (_url cb &optional _raw) (cl-incf calls) (setq pending cb))))
+         (jenkins--console-fetch)
+         (jenkins--console-fetch)
+         (should (= calls 1))
+         (should jenkins--console-in-flight)
+         (funcall pending (list :body "b\n"
+                                :headers '(("x-text-size" . "4")))
+                  nil)
+         (should (null jenkins--console-in-flight))
+         (should (equal (buffer-string) "a\nb\n")))))))
+
+(ert-deftest jenkins-test-console-fetch-error-stops-following ()
+  (jenkins-test--with-config
+   (let ((jenkins-console-poll-interval 600))
+     (jenkins-test--with-console buf "a\nb\n" '(2 4)
+       (should jenkins--console-timer)
+       (cl-letf (((symbol-function 'jenkins--request-async)
+                  (lambda (_url cb &optional _raw) (funcall cb nil "HTTP 503"))))
+         (jenkins--console-fetch))
+       (should (null jenkins--console-timer))
+       (should (null jenkins--console-in-flight))
+       (should (equal (buffer-string) "a\n"))
+       ;; The user can pick it up again.
+       (jenkins-test--with-log-stub "a\nb\n" '(4)
+         (jenkins-console-toggle-follow))
+       (should (equal (buffer-string) "a\nb\n"))))))
+
+(ert-deftest jenkins-test-console-ignores-answer-after-reload ()
+  (jenkins-test--with-config
+   (let ((jenkins-console-poll-interval 600) pending)
+     (jenkins-test--with-console buf "a\nb\nc\n" '(2 4 6)
+       (cl-letf (((symbol-function 'jenkins--request-async)
+                  (lambda (_url cb &optional _raw) (setq pending cb))))
+         (jenkins--console-fetch))
+       ;; The buffer moves on before the old answer arrives.
+       (setq jenkins--console-offset 99)
+       (funcall pending (list :body "stale\n" :headers '(("x-text-size" . "8"))) nil)
+       (should (equal (buffer-string) "a\n"))
+       (should (= jenkins--console-offset 99))))))
+
+(ert-deftest jenkins-test-console-toggle-follow ()
+  (jenkins-test--with-config
+   (let ((jenkins-console-poll-interval 600))
+     (jenkins-test--with-console buf "a\nb\nc\n" '(2 4 6)
+       (should (timerp jenkins--console-timer))
+       (jenkins-console-toggle-follow)
+       (should (null jenkins--console-timer))
+       (should (null mode-line-process))
+       (jenkins-test--with-log-stub "a\nb\nc\n" '(4 6)
+         (jenkins-console-toggle-follow)
+         (should (timerp jenkins--console-timer))
+         ;; Following starts with an immediate fetch.
+         (should (equal (buffer-string) "a\nb\n")))))))
+
+(ert-deftest jenkins-test-console-toggle-follow-on-finished-build ()
+  (jenkins-test--with-config
+   (jenkins-test--with-console buf "a\n" nil
+     (jenkins-console-toggle-follow)
+     (should (null jenkins--console-timer)))))
+
+(ert-deftest jenkins-test-console-refresh-key-fetches-more ()
+  (jenkins-test--with-config
+   (let ((jenkins-console-poll-interval 600))
+     (jenkins-test--with-console buf "a\nb\n" '(2 4)
+       (jenkins-console-toggle-follow)  ; follow off, so only g fetches
+       (should (null jenkins--console-timer))
+       (jenkins-test--with-log-stub "a\nb\n" '(4)
+         (jenkins-console-refresh))
+       (should (equal (buffer-string) "a\nb\n"))))))
+
+(ert-deftest jenkins-test-console-refresh-key-on-finished-build ()
+  (jenkins-test--with-config
+   (jenkins-test--with-console buf "a\n" nil
+     (let ((calls 0))
+       (cl-letf (((symbol-function 'jenkins--request-async)
+                  (lambda (&rest _) (cl-incf calls))))
+         (jenkins-console-refresh))
+       (should (= calls 0))))))
+
+(ert-deftest jenkins-test-console-kill-buffer-cancels-timer ()
+  (jenkins-test--with-config
+   (let ((jenkins-console-poll-interval 600)
+         (before (copy-sequence timer-list)))
+     (jenkins-test--with-console buf "a\nb\n" '(2 4)
+       (should (timerp jenkins--console-timer))
+       (should-not (equal timer-list before))
+       (kill-buffer buf))
+     (should (equal timer-list before)))))
+
+(ert-deftest jenkins-test-console-reopen-restarts-from-zero ()
+  (jenkins-test--with-config
+   (let ((jenkins-console-poll-interval 600)
+         (before (copy-sequence timer-list)))
+     (jenkins-test--with-console buf "a\nb\n" '(2 4)
+       (let ((first jenkins--console-timer))
+         ;; Opening the same console again replaces the old timer.
+         (jenkins-test--with-log-stub "a\nb\n" '(2 4)
+           (let ((stub (jenkins-test--log-server "a\nb\n" '(2 4))))
+             (cl-letf (((symbol-function 'url-retrieve-synchronously) stub)
+                       ((symbol-function 'pop-to-buffer) #'ignore))
+               (jenkins-view-console "f/j" 7))))
+         (should (equal (buffer-string) "a\n"))
+         (should (timerp jenkins--console-timer))
+         (should-not (eq first jenkins--console-timer))
+         (should (= (cl-count-if (lambda (tm) (eq (timer--function tm) (timer--function jenkins--console-timer)))
+                                 timer-list)
+                    1)))))))
+
+(ert-deftest jenkins-test-console-failed-open-leaves-no-buffer ()
+  (jenkins-test--with-config
+   (cl-letf (((symbol-function 'url-retrieve-synchronously)
+              (lambda (&rest _) (jenkins-test--response-buffer 404 "")))
              ((symbol-function 'pop-to-buffer) #'ignore))
-     (jenkins-view-console "f/j" 5)
-     (with-current-buffer "*Jenkins-Console: f/j #5*"
-       (unwind-protect
-           (progn
-             (should (equal (buffer-string) "line1\nline2\n"))
-             (should (derived-mode-p 'jenkins-console-mode))
-             (should buffer-read-only))
-         (kill-buffer))))))
+     (should-error (jenkins-view-console "f/j" 9))
+     (should (null (get-buffer "*Jenkins-Console: f/j #9*"))))))
 
 ;;; Failed loads
 

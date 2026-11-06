@@ -16,7 +16,7 @@ The file is organised in sections, top to bottom:
 | Refresh handling | `jenkins--refresh-current`, `jenkins--refresh-later`, and the shared auto-refresh timer |
 | Jobs UI | `jenkins--job-entries`, `jenkins-mode`, folder navigation |
 | Build history | `jenkins--fetch-build-history`, `jenkins--history-entries`, `jenkins-build-history-mode` |
-| Console | `jenkins-console-mode`, `jenkins-view-console` |
+| Console | `jenkins-console-mode`, `jenkins-view-console`, and the live-follow functions `jenkins--console-fetch`, `jenkins--console-apply`, `jenkins--console-split` |
 
 ## Concepts
 
@@ -59,6 +59,29 @@ callback (`jenkins--apply-refresh`). The buffer-local `jenkins--refresh-in-fligh
 stops a second refresh from starting while one is waiting, and a failed refresh
 keeps the old rows. The interactive `jenkins-refresh` and `jenkins-history-refresh`
 (`g`) stay synchronous, so they report errors directly.
+
+### Console following
+
+`jenkins-view-console` reads the log with `/logText/progressiveText?start=N`
+instead of `/consoleText`. The reply carries two headers: `X-Text-Size` is the
+byte offset to ask for next, and `X-More-Data: true` means the build may still
+write. The buffer keeps these in `jenkins--console-offset` and
+`jenkins--console-more-data`, and a timer asks again until the header is gone.
+
+Things that are easy to get wrong:
+
+- **The offset is the header, not the body length.** The progressive text
+  contains hidden annotations (`ESC[8mha:...ESC[0m`), so the body is longer than
+  the log bytes it covers. Always take the next offset from `X-Text-Size`.
+- **Bodies are handled as bytes.** `jenkins--send` leaves the body undecoded;
+  `jenkins--console-split` cuts it at the last newline and keeps the rest in
+  `jenkins--console-pending`, so neither a line, an annotation nor a multibyte
+  character is ever split between two requests. Only the complete part is
+  decoded (`jenkins--decode`) and cleaned (`jenkins--console-text`).
+- **Stale answers are dropped.** An answer whose request started at an older
+  offset than the buffer now has is ignored.
+- `lastBuild` is resolved to a build number when the console is opened, so
+  following does not jump to a newer build.
 
 ## Running the checks
 
