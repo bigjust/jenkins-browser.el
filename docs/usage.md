@@ -78,6 +78,7 @@ are truncated (use `M-x toggle-truncate-lines` or widen the window).
 | --- | --- |
 | `RET`, `c` | Console of the build at point |
 | `R` | Re-trigger build with previous parameters pre-filled |
+| `Q` | Open the Jenkins build queue |
 | `k` | Abort the build at point (after confirmation) |
 | `o` | Open the build in the browser |
 | `g` | Refresh |
@@ -114,6 +115,16 @@ moment, and keeps following that build even if a newer one starts.
 In the jobs list, `k` stops the job's last build; in the history it stops the
 selected one. Both ask for confirmation first.
 
+### Build queue (`Q`)
+
+`Q` (or `M-x jenkins-browser-queue`) opens `*Jenkins-Queue*`, listing all
+pending builds across the server.
+
+- View queue item ID, task/job name, why the build is waiting, and elapsed queue time.
+- `k` or `d` cancels the queue item at point (with confirmation).
+- `RET` / `h` opens the build history for the queued job.
+- `g` refreshes the queue.
+
 ### Multiple server profiles
 
 `M-x jenkins-browser-switch-server` lets you switch between different Jenkins
@@ -124,6 +135,7 @@ instances configured in `~/.jenkins_jobs.ini` (e.g. `[jenkins]`, `[staging]`, `[
 | Command | Description |
 | --- | --- |
 | `jenkins-browser` | Open the top-level jobs list |
+| `jenkins-browser-queue` | Open the Jenkins build queue |
 | `jenkins-browser-switch-server` | Switch active server profile |
 | `jenkins-browser-refresh` | Refresh the current jobs list |
 | `jenkins-browser-enter` | Open the folder or history at point |

@@ -1238,6 +1238,7 @@ If the build is still running the buffer follows it, see
 (define-key jenkins-browser-build-history-mode-map (kbd "c")   #'jenkins-browser-history-view-console)
 (define-key jenkins-browser-build-history-mode-map (kbd "k")   #'jenkins-browser-history-abort-build)
 (define-key jenkins-browser-build-history-mode-map (kbd "R")   #'jenkins-browser-history-rebuild)
+(define-key jenkins-browser-build-history-mode-map (kbd "Q")   #'jenkins-browser-queue)
 (define-key jenkins-browser-build-history-mode-map (kbd "o")   #'jenkins-browser-history-open-in-browser)
 
 (define-derived-mode jenkins-browser-build-history-mode tabulated-list-mode "Jenkins-History"
@@ -1269,6 +1270,7 @@ If the build is still running the buffer follows it, see
 (define-key jenkins-browser-mode-map (kbd "h")   #'jenkins-browser-view-build-history)
 (define-key jenkins-browser-mode-map (kbd "c")   #'jenkins-browser-view-console)
 (define-key jenkins-browser-mode-map (kbd "k")   #'jenkins-browser-abort-build)
+(define-key jenkins-browser-mode-map (kbd "Q")   #'jenkins-browser-queue)
 (define-key jenkins-browser-mode-map (kbd "f")   #'jenkins-browser-toggle-running-filter)
 (define-key jenkins-browser-mode-map (kbd "o")   #'jenkins-browser-open-in-browser)
 
@@ -1288,6 +1290,131 @@ If the build is still running the buffer follows it, see
   (hl-line-mode 1)
   (tabulated-list-init-header)
   (jenkins-browser--ensure-timer))
+
+;;; --- Build Queue Mode ---
+
+(defvar jenkins-browser-queue-mode-map (make-sparse-keymap)
+  "Keymap for `jenkins-browser-queue-mode` buffers.")
+(set-keymap-parent jenkins-browser-queue-mode-map tabulated-list-mode-map)
+(define-key jenkins-browser-queue-mode-map (kbd "g")   #'jenkins-browser-queue-refresh)
+(define-key jenkins-browser-queue-mode-map (kbd "k")   #'jenkins-browser-queue-cancel-item)
+(define-key jenkins-browser-queue-mode-map (kbd "d")   #'jenkins-browser-queue-cancel-item)
+(define-key jenkins-browser-queue-mode-map (kbd "RET") #'jenkins-browser-queue-open-task)
+(define-key jenkins-browser-queue-mode-map [return]    #'jenkins-browser-queue-open-task)
+(define-key jenkins-browser-queue-mode-map (kbd "h")   #'jenkins-browser-queue-open-task)
+(define-key jenkins-browser-queue-mode-map (kbd "o")   #'jenkins-browser-queue-open-in-browser)
+
+(define-derived-mode jenkins-browser-queue-mode tabulated-list-mode "Jenkins-Queue"
+  "Major mode for browsing the Jenkins build queue.
+
+\\{jenkins-browser-queue-mode-map}"
+  :keymap jenkins-browser-queue-mode-map
+  (setq tabulated-list-format
+        [("ID"       8 t)
+         ("Task"    35 t)
+         ("Reason"  45 nil)
+         ("In Queue" 14 nil)])
+  (setq tabulated-list-padding 2)
+  (setq tabulated-list-sort-key (cons "ID" nil))
+  (add-hook 'tabulated-list-revert-hook #'jenkins-browser-queue-refresh nil t)
+  (hl-line-mode 1)
+  (tabulated-list-init-header))
+
+(defun jenkins-browser--queue-url ()
+  "Return the API URL listing queue items."
+  (concat (jenkins-browser-base-url)
+          "/queue/api/json?tree="
+          (url-hexify-string "items[id,why,blocked,buildable,stuck,inQueueSince,task[name,url,_class]]")))
+
+(defun jenkins-browser--fetch-queue ()
+  "Fetch queue items from Jenkins."
+  (let ((resp (jenkins-browser--request "GET" (jenkins-browser--queue-url))))
+    (when (hash-table-p resp)
+      (jenkins-browser--get "items" resp))))
+
+(defun jenkins-browser--format-in-queue (since-millis)
+  "Format SINCE-MILLIS epoch timestamp as elapsed time in queue."
+  (if (or (null since-millis) (not (numberp since-millis)) (<= since-millis 0))
+      "-"
+    (let* ((now (* 1000.0 (float-time)))
+           (elapsed (max 0 (- now since-millis))))
+      (jenkins-browser--format-duration elapsed))))
+
+(defun jenkins-browser--queue-entries (items)
+  "Generate tabulated list entries from queue ITEMS."
+  (let (entries)
+    (dolist (item (if (listp items) items nil))
+      (when (hash-table-p item)
+        (let* ((id (jenkins-browser--get "id" item))
+               (why (or (jenkins-browser--get "why" item) "-"))
+               (task (jenkins-browser--get "task" item))
+               (task-name (if (hash-table-p task)
+                              (or (jenkins-browser--get "name" task) "Unknown")
+                            "Unknown"))
+               (since (jenkins-browser--get "inQueueSince" item))
+               (blocked (jenkins-browser--get "blocked" item))
+               (stuck (jenkins-browser--get "stuck" item))
+               (reason-str (cond
+                            (stuck (concat "[STUCK] " why))
+                            (blocked (concat "[BLOCKED] " why))
+                            (t why))))
+          (when id
+            (push (list id
+                        (vector (propertize (format "%s" id) 'face 'font-lock-keyword-face)
+                                (propertize task-name 'face 'font-lock-function-name-face)
+                                (jenkins-browser--format-description reason-str)
+                                (jenkins-browser--format-in-queue since)))
+                  entries)))))
+    (nreverse entries)))
+
+(defun jenkins-browser-queue-refresh ()
+  "Refresh the build queue buffer."
+  (interactive)
+  (let ((items (jenkins-browser--fetch-queue)))
+    (setq tabulated-list-entries (jenkins-browser--queue-entries items))
+    (tabulated-list-print t)))
+
+(defun jenkins-browser-queue-cancel-item ()
+  "Cancel the queue item at point."
+  (interactive)
+  (let ((id (tabulated-list-get-id)))
+    (unless id
+      (user-error "No queue item selected"))
+    (when (yes-or-no-p (format "Cancel queue item #%s? " id))
+      (jenkins-browser--http-full "POST" (concat (jenkins-browser-base-url)
+                                                 "/queue/cancelItem?id="
+                                                 (url-hexify-string (format "%s" id))))
+      (message "Cancelled queue item #%s" id)
+      (jenkins-browser-queue-refresh))))
+
+(defun jenkins-browser-queue-open-task ()
+  "Open build history for the task at point in the queue."
+  (interactive)
+  (let* ((id (tabulated-list-get-id))
+         (entry (and id (cl-find-if (lambda (e) (equal (car e) id)) tabulated-list-entries)))
+         (task-name (and entry (aref (cadr entry) 1))))
+    (if (and task-name (not (string-empty-p task-name)))
+        (jenkins-browser-view-build-history task-name)
+      (user-error "Cannot find task name for queue item"))))
+
+(defun jenkins-browser-queue-open-in-browser ()
+  "Open the queue item or task in the web browser."
+  (interactive)
+  (let ((id (tabulated-list-get-id)))
+    (if id
+        (browse-url (concat (jenkins-browser-base-url) "/queue/item/" (format "%s" id)))
+      (browse-url (concat (jenkins-browser-base-url) "/queue/")))))
+
+;;;###autoload
+(defun jenkins-browser-queue ()
+  "Open the Jenkins build queue viewer."
+  (interactive)
+  (jenkins-browser--open-buffer
+   "*Jenkins-Queue*"
+   (lambda ()
+     (jenkins-browser-queue-mode)
+     (jenkins-browser-queue-refresh))
+   #'pop-to-buffer))
 
 ;;;###autoload
 (defun jenkins-browser ()

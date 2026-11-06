@@ -614,6 +614,37 @@ Collect the text of `display-warning' calls in the variable `warnings'."
        (should (equal (reverse prompts)
                       '(("BRANCH" . "hotfix-1") ("DRY" . "true"))))))))
 
+(ert-deftest jenkins-browser-test-queue-entries ()
+  (let* ((items (jenkins-browser-test--json
+                 "[{\"id\":42,\"why\":\"Waiting for executor\",\"blocked\":false,\"stuck\":false,
+                   \"inQueueSince\":1700000000000,\"task\":{\"name\":\"deploy-prod\"}},
+                  {\"id\":43,\"why\":\"Node offline\",\"blocked\":true,\"stuck\":false,
+                   \"inQueueSince\":1700000000000,\"task\":{\"name\":\"test-run\"}}]"))
+         (entries (jenkins-browser--queue-entries items)))
+    (should (= (length entries) 2))
+    (should (equal (car (car entries)) 42))
+    (should (equal (aref (cadr (car entries)) 1) "deploy-prod"))
+    (should (equal (aref (cadr (car entries)) 2) "Waiting for executor"))
+    (should (string-match-p "\\[BLOCKED\\]" (aref (cadr (cadr entries)) 2)))))
+
+(ert-deftest jenkins-browser-test-queue-cancel ()
+  (jenkins-browser-test--with-config
+   (let (calls)
+     (cl-letf (((symbol-function 'jenkins-browser--http-full)
+                (lambda (method url &rest _)
+                  (push (cons method url) calls)
+                  (cons "" nil)))
+               ((symbol-function 'yes-or-no-p) (lambda (&rest _) t))
+               ((symbol-function 'jenkins-browser-queue-refresh) #'ignore))
+       (with-temp-buffer
+         (jenkins-browser-queue-mode)
+         (setq tabulated-list-entries '((42 ["42" "deploy" "why" "1m"])))
+         (tabulated-list-print t)
+         (goto-char (point-min))
+         (jenkins-browser-queue-cancel-item))
+       (should (equal (car calls)
+                      '("POST" . "https://ci.example.com/queue/cancelItem?id=42")))))))
+
 (ert-deftest jenkins-browser-test-abort-urls ()
   (jenkins-browser-test--with-config
    (let (calls)
