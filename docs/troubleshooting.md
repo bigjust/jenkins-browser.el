@@ -2,8 +2,8 @@
 
 ## "Jenkins URL not configured"
 
-Neither `jenkins-url` nor a `url=` entry in the `[jenkins]` section of
-`jenkins-ini-path` was found. Check the section name is exactly `[jenkins]`.
+Neither `jenkins-browser-url` nor a `url=` entry in the `[jenkins]` section of
+`jenkins-browser-ini-path` was found. Check the section name is exactly `[jenkins]`.
 See [configuration](configuration.md).
 
 ## "Jenkins returned HTTP 401"
@@ -16,7 +16,7 @@ stripped, so don't quote them.
 ## "Jenkins returned HTTP 403"
 
 You are authenticated but not permitted, or a CSRF check failed. API tokens
-normally bypass the crumb requirement. With a password, `jenkins-mode`
+normally bypass the crumb requirement. With a password, `jenkins-browser`
 fetches a crumb automatically, but if the Jenkins session is cookie-bound the
 crumb may be rejected. Use an API token instead.
 
@@ -28,15 +28,15 @@ buffer so the path is built for you.
 
 ## The job list is empty
 
-- If `jenkins-view-name` is set, the view may not exist or be empty.
+- If `jenkins-browser-view-name` is set, the view may not exist or be empty.
 - With the running-only filter on (`f`), only running jobs and folders appear.
 - Your user may lack *Overall/Read* or *Job/Read*.
 
 ## A container isn't shown as a folder
 
 Press `RET` on it and see whether history opens instead. If so, add its Jenkins
-class to `jenkins-folder-class-regexp`. You can see the class at
-`<jenkins-url>/job/<name>/api/json?tree=_class`.
+class to `jenkins-browser-folder-class-regexp`. You can see the class at
+`<jenkins-browser-url>/job/<name>/api/json?tree=_class`.
 
 ## `void-function json-parse-string` / wrong-type errors parsing JSON
 
@@ -50,7 +50,7 @@ Auto-refresh and the refresh after triggering or aborting a build run in the
 background. Opening a buffer, pressing `g`, viewing a console and the commands
 that change state (trigger, abort) are synchronous, so a slow server makes
 Emacs wait for that one request. A hung server is cut off after
-`jenkins-request-timeout` seconds.
+`jenkins-browser-request-timeout` seconds.
 
 ## Self-signed certificates
 

@@ -1,4 +1,4 @@
-# jenkins-mode.el
+# jenkins-browser
 
 An interactive Emacs major mode for browsing Jenkins jobs: list and filter
 jobs, drill into folders and multibranch projects, trigger builds with
@@ -12,32 +12,32 @@ JSON support, which every Emacs 30 build has).
 
 - **Jobs view**: status, last build number and duration, with the current line highlighted.
 - **Folders and multibranch pipelines**: folders show as `name/` and open with `RET`, to any depth.
-- **Views**: set `jenkins-view-name` to use a Jenkins view as the top-level list.
+- **Views**: set `jenkins-browser-view-name` to use a Jenkins view as the top-level list.
 - **Running filter**: toggle between all jobs and running jobs only with `f`. Folders always stay visible.
 - **Parameterized triggering**: reads the job's parameter definitions and prompts for each one. Choice parameters use `completing-read`, and defaults are pre-filled.
-- **Build history**: build number, status, timestamp, **author (culprits)**, duration and **description** for the most recent builds (`jenkins-history-limit`, default 50).
+- **Build history**: build number, status, timestamp, **author (culprits)**, duration and **description** for the most recent builds (`jenkins-browser-history-limit`, default 50).
 - **Console viewer**: `^M` characters and Jenkins' hidden console annotations are stripped and the buffer is read-only. Any build can be opened, not just the latest. A running build is **followed live**: new output is fetched in the background and appended.
 - **Abort** the last build from the jobs list, or a specific build from the history.
 - **CSRF crumbs** are handled automatically on `POST`.
 - **HTTP errors** (401, 403, 404, ...) show up as Emacs errors rather than being parsed as data.
 - **Optional auto-refresh** of visible Jenkins buffers.
-- **Zero-config credentials**: reads `~/.jenkins_jobs.ini`, or use `M-x customize-group RET jenkins`.
+- **Zero-config credentials**: reads `~/.jenkins_jobs.ini`, or use `M-x customize-group RET jenkins-browser`.
 
 ## Installation
 
 ```bash
-git clone https://github.com/bigjust/jenkins-mode.el.git ~/code/jenkins-mode.el
+git clone https://github.com/bigjust/jenkins-browser.git ~/code/jenkins-browser
 ```
 
 ```elisp
-(add-to-list 'load-path "~/code/jenkins-mode.el")
-(require 'jenkins-mode)
+(add-to-list 'load-path "~/code/jenkins-browser")
+(require 'jenkins-browser)
 
 ;; Optional global shortcut
-(global-set-key (kbd "C-c j") #'jenkins)
+(global-set-key (kbd "C-c j") #'jenkins-browser)
 ```
 
-Then run `M-x jenkins`.
+Then run `M-x jenkins-browser`.
 
 ## Configuration
 
@@ -53,9 +53,9 @@ password=your_api_token
 Or set the variables directly:
 
 ```elisp
-(setq jenkins-url "https://jenkins.example.com"
-      jenkins-username "your_username"
-      jenkins-api-token "your_api_token")
+(setq jenkins-browser-url "https://jenkins.example.com"
+      jenkins-browser-username "your_username"
+      jenkins-browser-api-token "your_api_token")
 ```
 
 All options, including views, timeouts and auto-refresh, are covered in
@@ -91,7 +91,7 @@ All options, including views, timeouts and auto-refresh, are covered in
 
 A read-only `special-mode` buffer: `q` quits, `SPC` / `DEL` scroll. For a
 running build the mode line shows `follow` and new output is appended every
-`jenkins-console-poll-interval` seconds.
+`jenkins-browser-console-poll-interval` seconds.
 
 | Key | Action |
 | --- | --- |

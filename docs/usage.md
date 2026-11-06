@@ -1,11 +1,11 @@
 # Usage
 
-Start with `M-x jenkins`. All three buffer types are read-only and
+Start with `M-x jenkins-browser`. All three buffer types are read-only and
 refreshable with `g`.
 
 ## The jobs list
 
-`M-x jenkins` opens `*Jenkins*`:
+`M-x jenkins-browser` opens `*Jenkins*`:
 
 ```
   Job Name                                  Status       Last #   Duration
@@ -26,7 +26,7 @@ its own buffer. Press `q` to go back.
 
 Multibranch projects behave like folders, so their branches (and pull requests)
 are listed as jobs. Branch names such as `feature/x` are stored by Jenkins as
-`feature%2Fx`, and `jenkins-mode` encodes them correctly.
+`feature%2Fx`, and `jenkins-browser` encodes them correctly.
 
 Actions on a folder row (`b`, `c`, `k`, `o`, `h`) report that it is a folder
 rather than acting on it.
@@ -39,7 +39,7 @@ Everywhere a job is asked for, it is a slash-separated path such as
 
 ### Triggering a build (`b`)
 
-`jenkins-trigger-job` fetches the job's definition:
+`jenkins-browser-trigger-job` fetches the job's definition:
 
 - **No parameters**: the build is queued immediately.
 - **With parameters**: each parameter is prompted for in turn.
@@ -55,7 +55,7 @@ are asked to pick one from the current folder.
 ### Build history (`RET` or `h`)
 
 Opens `*Jenkins-History: <job>*` with the most recent builds
-(`jenkins-history-limit`):
+(`jenkins-browser-history-limit`):
 
 ```
   Build   Status    Timestamp         Author          Duration  Description
@@ -90,7 +90,7 @@ at point. The log opens in `*Jenkins-Console: <job> #<n>*`:
 - point starts at the end of the log.
 
 A running build is followed live. The mode line shows `follow`, and every
-`jenkins-console-poll-interval` seconds (default 2) the new part of the log is
+`jenkins-browser-console-poll-interval` seconds (default 2) the new part of the log is
 fetched in the background and appended. Only whole lines are shown, so a line
 never appears half written. If point is at the end of the buffer it keeps
 following the output, and if you have scrolled up, the buffer leaves your
@@ -114,23 +114,23 @@ selected one. Both ask for confirmation first.
 
 | Command | Description |
 | --- | --- |
-| `jenkins` | Open the top-level jobs list |
-| `jenkins-refresh` | Refresh the current jobs list |
-| `jenkins-enter` | Open the folder or history at point |
-| `jenkins-open-folder` | Open the jobs list for a folder path (Lisp function) |
-| `jenkins-toggle-running-filter` | Toggle running-only |
-| `jenkins-trigger-job` | Trigger a job |
-| `jenkins-view-build-history` | Show a job's builds |
-| `jenkins-view-console` | Show a build's console |
-| `jenkins-abort-build` | Abort a job's last build |
-| `jenkins-open-in-browser` | Open a job in the browser |
-| `jenkins-history-view-console` | Console for a build in the history |
-| `jenkins-history-abort-build` | Abort a build in the history |
-| `jenkins-history-open-in-browser` | Open a build in the browser |
-| `jenkins-history-refresh` | Refresh the current history |
-| `jenkins-reload` | Reload `jenkins-mode` from its library file (for development) |
+| `jenkins-browser` | Open the top-level jobs list |
+| `jenkins-browser-refresh` | Refresh the current jobs list |
+| `jenkins-browser-enter` | Open the folder or history at point |
+| `jenkins-browser-open-folder` | Open the jobs list for a folder path (Lisp function) |
+| `jenkins-browser-toggle-running-filter` | Toggle running-only |
+| `jenkins-browser-trigger-job` | Trigger a job |
+| `jenkins-browser-view-build-history` | Show a job's builds |
+| `jenkins-browser-view-console` | Show a build's console |
+| `jenkins-browser-abort-build` | Abort a job's last build |
+| `jenkins-browser-open-in-browser` | Open a job in the browser |
+| `jenkins-browser-history-view-console` | Console for a build in the history |
+| `jenkins-browser-history-abort-build` | Abort a build in the history |
+| `jenkins-browser-history-open-in-browser` | Open a build in the browser |
+| `jenkins-browser-history-refresh` | Refresh the current history |
+| `jenkins-browser-reload` | Reload `jenkins-browser` from its library file (for development) |
 
 Both major modes derive from `tabulated-list-mode`, so its keys also work
 (`n`/`p`, `S`, `{`/`}` to resize columns, and so on). The major modes are
-`jenkins-mode`, `jenkins-build-history-mode` and `jenkins-console-mode`, each
+`jenkins-browser-mode`, `jenkins-browser-build-history-mode` and `jenkins-browser-console-mode`, each
 with a hook of the same name plus `-hook`.
