@@ -23,11 +23,15 @@ user=your_username
 password=your_api_token
 ```
 
-Other sections are ignored. Lines starting with `#` or `;` are comments, and
-keys and values may be separated by `=` or `:`. Inline comments are not
-supported, because a token may contain `#` or `;`. Keep the file private
-(`chmod 600`): if the password is read from an INI file that other users can
-read, Emacs shows a warning once per session (not on Windows).
+Multiple server sections (e.g. `[jenkins]`, `[staging]`, `[prod]`) can be
+defined in the same file. You can switch between profiles interactively using
+`M-x jenkins-browser-switch-server` or by configuring `jenkins-browser-server-profile`.
+
+Lines starting with `#` or `;` are comments, and keys and values may be
+separated by `=` or `:`. Inline comments are not supported, because a token may
+contain `#` or `;`. Keep the file private (`chmod 600`): if the password is read
+from an INI file that other users can read, Emacs shows a warning once per
+session (not on Windows).
 
 ### Emacs variables
 
@@ -70,6 +74,7 @@ Customize with `M-x customize-group RET jenkins-browser`.
 | `jenkins-browser-username` | `nil` | Username. `nil` means read from the INI file. |
 | `jenkins-browser-api-token` | `nil` | API token or password. `nil` means read from the INI file. |
 | `jenkins-browser-ini-path` | `~/.jenkins_jobs.ini` | Location of the INI file. |
+| `jenkins-browser-server-profile` | `"jenkins"` | Active profile section in the INI file. |
 | `jenkins-browser-view-name` | `nil` | Jenkins view to use as the top-level list. See below. |
 | `jenkins-browser-auto-refresh-interval` | `nil` | Seconds between automatic refreshes, or `nil`/`0` to disable. See below. |
 | `jenkins-browser-request-timeout` | `30` | Timeout in seconds for each HTTP request. |

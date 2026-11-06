@@ -113,11 +113,17 @@ moment, and keeps following that build even if a newer one starts.
 In the jobs list, `k` stops the job's last build; in the history it stops the
 selected one. Both ask for confirmation first.
 
+### Multiple server profiles
+
+`M-x jenkins-browser-switch-server` lets you switch between different Jenkins
+instances configured in `~/.jenkins_jobs.ini` (e.g. `[jenkins]`, `[staging]`, `[prod]`).
+
 ## Commands
 
 | Command | Description |
 | --- | --- |
 | `jenkins-browser` | Open the top-level jobs list |
+| `jenkins-browser-switch-server` | Switch active server profile |
 | `jenkins-browser-refresh` | Refresh the current jobs list |
 | `jenkins-browser-enter` | Open the folder or history at point |
 | `jenkins-browser-open-folder` | Open the jobs list for a folder path (Lisp function) |

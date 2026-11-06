@@ -84,6 +84,38 @@
             (should (= (length ini) 3))))
       (delete-file file))))
 
+(ert-deftest jenkins-browser-test-parse-ini-multi-section ()
+  (let ((file (make-temp-file "jenkins-browser-ini")))
+    (unwind-protect
+        (progn
+          (with-temp-file file
+            (insert "[jenkins]\nurl = https://ci.example.com\nuser = alice\n"
+                    "[staging]\nurl = https://staging.example.com\nuser = bob\n"))
+          (let ((jenkins-browser-ini-path file)
+                (jenkins-browser-server-profile "staging"))
+            (should (equal (jenkins-browser-server-profiles) '("jenkins" "staging")))
+            (should (equal (jenkins-browser--get-config "url") "https://staging.example.com"))
+            (should (equal (jenkins-browser--get-config "user") "bob"))))
+      (delete-file file))))
+
+(ert-deftest jenkins-browser-test-switch-server ()
+  (let ((file (make-temp-file "jenkins-browser-ini")))
+    (unwind-protect
+        (progn
+          (with-temp-file file
+            (insert "[jenkins]\nurl = https://ci.example.com\nuser = alice\n"
+                    "[prod]\nurl = https://prod.example.com\nuser = admin\n"))
+          (let ((jenkins-browser-ini-path file)
+                (jenkins-browser-server-profile "jenkins")
+                (jenkins-browser-url nil)
+                (jenkins-browser-username nil)
+                (jenkins-browser-api-token nil))
+            (should (equal (jenkins-browser--get-config "url") "https://ci.example.com"))
+            (jenkins-browser-switch-server "prod")
+            (should (equal jenkins-browser-server-profile "prod"))
+            (should (equal (jenkins-browser--get-config "url") "https://prod.example.com"))))
+      (delete-file file))))
+
 (defmacro jenkins-browser-test--with-ini-mode (mode &rest body)
   "Run BODY with an INI file holding a password, created with MODE.
 Collect the text of `display-warning' calls in the variable `warnings'."

@@ -83,6 +83,11 @@ If nil, attempts to read from `~/.jenkins_jobs.ini`."
   :type 'file
   :group 'jenkins-browser)
 
+(defcustom jenkins-browser-server-profile "jenkins"
+  "Name of the server profile section in `jenkins-browser-ini-path' to use."
+  :type 'string
+  :group 'jenkins-browser)
+
 (defcustom jenkins-browser-view-name nil
   "Name of a Jenkins view to use as the root job list.
 If nil, the jobs of the Jenkins root are listed.  The view only applies to
@@ -128,33 +133,71 @@ buffer is created."
 
 ;;; --- Configuration & Credentials ---
 
-(defun jenkins-browser--parse-ini-file (path)
-  "Parse [jenkins] section from PATH and return an alist.
-Lines starting with `#' or `;' are comments, and a key is separated
-from its value by `=' or `:', as Jenkins Job Builder allows.  Inline
-comments are not recognised, since a token may contain `#' or `;'."
+(defun jenkins-browser--parse-ini-sections (path)
+  "Parse all sections from PATH and return an alist of (SECTION . KEY-VALUES)."
   (when (file-readable-p path)
     (with-temp-buffer
       (insert-file-contents path)
       (goto-char (point-min))
-      (let (result in-jenkins-section)
+      (let (sections current-section current-pairs)
         (while (not (eobp))
           (let ((line (string-trim (buffer-substring-no-properties
                                     (line-beginning-position)
                                     (line-end-position)))))
             (cond
              ((string-match-p "^[#;]" line))
-             ((string-match-p "^\\[jenkins\\]" line)
-              (setq in-jenkins-section t))
-             ((string-match-p "^\\[" line)
-              (setq in-jenkins-section nil))
-             ((and in-jenkins-section
+             ((string-match "^\\[\\([^]]+\\)\\]" line)
+              (when current-section
+                (push (cons current-section (nreverse current-pairs)) sections))
+              (setq current-section (match-string 1 line)
+                    current-pairs nil))
+             ((and current-section
                    (string-match "^\\([^=:]+\\)[=:]\\(.*\\)$" line))
               (push (cons (string-trim (match-string 1 line))
                           (string-trim (match-string 2 line)))
-                    result))))
+                    current-pairs))))
           (forward-line 1))
-        result))))
+        (when current-section
+          (push (cons current-section (nreverse current-pairs)) sections))
+        (nreverse sections)))))
+
+(defun jenkins-browser--parse-ini-file (path &optional section)
+  "Parse SECTION (default `jenkins-browser-server-profile') from PATH.
+Lines starting with `#' or `;' are comments, and a key is separated
+from its value by `=' or `:', as Jenkins Job Builder allows.  Inline
+comments are not recognised, since a token may contain `#' or `;'.
+Return an alist of (KEY . VALUE)."
+  (let* ((sec-name (or section jenkins-browser-server-profile "jenkins"))
+         (sections (jenkins-browser--parse-ini-sections path)))
+    (cdr (assoc sec-name sections))))
+
+(defvar jenkins-browser--crumb-cache nil
+  "Cached CSRF crumb as (KEY . CRUMB), or nil.
+KEY identifies the server and user the crumb was issued for, see
+`jenkins-browser--crumb-key'.  CRUMB is a cons (HEADER . VALUE).")
+
+(defun jenkins-browser-server-profiles ()
+  "Return list of available server profile names from `jenkins-browser-ini-path'."
+  (let ((sections (jenkins-browser--parse-ini-sections jenkins-browser-ini-path)))
+    (mapcar #'car sections)))
+
+(defun jenkins-browser-switch-server (profile)
+  "Switch the active Jenkins server configuration to PROFILE."
+  (interactive
+   (let ((profiles (jenkins-browser-server-profiles)))
+     (unless profiles
+       (user-error "No server profiles found in %s" jenkins-browser-ini-path))
+     (list (completing-read "Jenkins server profile: " profiles nil t nil nil
+                            jenkins-browser-server-profile))))
+  (setq jenkins-browser-server-profile profile
+        jenkins-browser-url nil
+        jenkins-browser-username nil
+        jenkins-browser-api-token nil
+        jenkins-browser--crumb-cache nil)
+  (when (get-buffer "*Jenkins*")
+    (with-current-buffer "*Jenkins*"
+      (jenkins-browser-refresh)))
+  (message "Switched to Jenkins server profile '%s'" profile))
 
 ;; Paths already warned about, so the warning appears once per session.
 (defvar jenkins-browser--warned-ini-paths nil
@@ -254,11 +297,6 @@ Converts `:null` and `:json-false` values to nil."
   (when (hash-table-p obj)
     (let ((val (gethash key obj)))
       (if (memq val '(:null :json-false)) nil val))))
-
-(defvar jenkins-browser--crumb-cache nil
-  "Cached CSRF crumb as (KEY . CRUMB), or nil.
-KEY identifies the server and user the crumb was issued for, see
-`jenkins-browser--crumb-key'.  CRUMB is a cons (HEADER . VALUE).")
 
 (defun jenkins-browser--crumb-key ()
   "Return a string identifying the current server and user."

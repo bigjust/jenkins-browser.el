@@ -18,6 +18,7 @@ JSON support, which every Emacs 30 build has).
 - **Build history**: build number, status, timestamp, **author (culprits)**, duration and **description** for the most recent builds (`jenkins-browser-history-limit`, default 50).
 - **Console viewer**: `^M` characters and Jenkins' hidden console annotations are stripped and the buffer is read-only. Any build can be opened, not just the latest. A running build is **followed live**: new output is fetched in the background and appended.
 - **Abort** the last build from the jobs list, or a specific build from the history.
+- **Server Profiles**: switch between multiple Jenkins instances defined in `~/.jenkins_jobs.ini` using `M-x jenkins-browser-switch-server`.
 - **CSRF crumbs** are handled automatically on `POST`.
 - **HTTP errors** (401, 403, 404, ...) show up as Emacs errors rather than being parsed as data.
 - **Optional auto-refresh** of visible Jenkins buffers.
