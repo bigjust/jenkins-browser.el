@@ -744,6 +744,12 @@ Jenkins expects the strings \"true\" and \"false\" for these, not Lisp values."
     (and (stringp class)
          (string-match-p "BooleanParameterDefinition" class))))
 
+(defun jenkins-browser--password-parameter-p (param)
+  "Return non-nil if the parameter definition hash-table PARAM is a password."
+  (let ((class (or (jenkins-browser--get "_class" param) (jenkins-browser--get "type" param))))
+    (and (stringp class)
+         (string-match-p "PasswordParameterDefinition" class))))
+
 (defun jenkins-browser-trigger-job (job)
   "Interactively trigger JOB, prompting for parameters if defined.
 JOB is a slash-separated path such as \"folder/job\"."
@@ -770,6 +776,7 @@ JOB is a slash-separated path such as \"folder/job\"."
                    (p-desc (or (jenkins-browser--get "description" p) ""))
                    (default-obj (jenkins-browser--get "defaultParameterValue" p))
                    (boolean-p (jenkins-browser--boolean-parameter-p p))
+                   (password-p (jenkins-browser--password-parameter-p p))
                    (p-default (if boolean-p
                                   (if (and (hash-table-p default-obj)
                                            (jenkins-browser--get "value" default-obj))
@@ -781,10 +788,17 @@ JOB is a slash-separated path such as \"folder/job\"."
                    (choices (if boolean-p
                                 '("true" "false")
                               (jenkins-browser--get "choices" p)))
-                   (val (if (and choices (listp choices))
-                            (completing-read (format "%s (%s): " p-name p-desc) choices nil t p-default)
+                   (val (cond
+                         ((and choices (listp choices))
+                          (completing-read (format "%s (%s): " p-name p-desc) choices nil t p-default))
+                         (password-p
+                          (read-passwd (if (string-empty-p p-desc)
+                                           (format "%s: " p-name)
+                                         (format "%s (%s): " p-name p-desc))
+                                       nil p-default))
+                         (t
                           (read-string (format "%s [%s] (%s): " p-name (or p-default "") p-desc)
-                                       nil nil p-default))))
+                                       nil nil p-default)))))
               (when p-name
                 (push (format "%s=%s" (url-hexify-string p-name) (url-hexify-string (or val "")))
                       query-params)))))

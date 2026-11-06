@@ -457,6 +457,28 @@ Collect the text of `display-warning' calls in the variable `warnings'."
        (should (equal (reverse prompts)
                       '((("true" "false") . "true") (("true" "false") . "false"))))))))
 
+(ert-deftest jenkins-browser-test-trigger-password-parameter ()
+  (jenkins-browser-test--with-config
+   (let (calls passwords)
+     (cl-letf (((symbol-function 'jenkins-browser--request)
+                (lambda (method url &rest _)
+                  (push (cons method url) calls)
+                  (if (string-suffix-p "/api/json" url)
+                      (jenkins-browser-test--json
+                       "{\"property\":[{\"parameterDefinitions\":[
+                          {\"_class\":\"hudson.model.PasswordParameterDefinition\",
+                           \"name\":\"SECRET_KEY\",\"description\":\"auth key\",
+                           \"defaultParameterValue\":{\"value\":\"defpass\"}}]}]}")
+                    "")))
+               ((symbol-function 'read-passwd)
+                (lambda (prompt &optional _confirm default)
+                  (push (cons prompt default) passwords)
+                  "s3cr3t!")))
+       (jenkins-browser-trigger-job "job")
+       (should (member '("POST" . "https://ci.example.com/job/job/buildWithParameters?SECRET_KEY=s3cr3t%21")
+                       calls))
+       (should (equal passwords '(("SECRET_KEY (auth key): " . "defpass"))))))))
+
 (ert-deftest jenkins-browser-test-abort-urls ()
   (jenkins-browser-test--with-config
    (let (calls)

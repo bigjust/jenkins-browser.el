@@ -44,6 +44,7 @@ Everywhere a job is asked for, it is a slash-separated path such as
 - **No parameters**: the build is queued immediately.
 - **With parameters**: each parameter is prompted for in turn.
   - Choice parameters use `completing-read` with the default pre-selected.
+  - Password parameters (`PasswordParameterDefinition`) use `read-passwd` with hidden input.
   - Everything else uses `read-string` with the default pre-filled. The parameter's description is shown in the prompt.
   - The build is then queued with `buildWithParameters`.
 
