@@ -5,6 +5,7 @@ This file provides guidance to agents when working with code in this repository.
 Single-file Emacs Lisp package: all code in `jenkins-mode.el`, tests in `test/jenkins-mode-test.el` (ERT). Architecture notes: `docs/development.md`.
 
 ## Commands (run from repo root; see docs/development.md)
+- Everything CI runs: `make check` (`compile`, `checkdoc`, `lint`, `test`). `make lint` installs package-lint into git-ignored `./.elpa`.
 - Byte-compile (must be warning-free; delete the `.elc` afterwards):
   `emacs -Q --batch -L . --eval '(setq byte-compile-error-on-warn t)' -f batch-byte-compile jenkins-mode.el && rm -f jenkins-mode.elc`
 - Docstring lint: `emacs -Q --batch --eval '(checkdoc-file "jenkins-mode.el")'`

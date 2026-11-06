@@ -24,18 +24,13 @@ jobs:
           version: ${{ matrix.emacs_version }}
 
       - name: Byte-compile (warnings are errors)
-        run: |
-          emacs -Q --batch -L . --eval '(setq byte-compile-error-on-warn t)' \
-                -f batch-byte-compile jenkins-mode.el
-          rm -f jenkins-mode.elc
+        run: make compile
 
       - name: Checkdoc
-        run: |
-          out=$(emacs -Q --batch --eval '(checkdoc-file "jenkins-mode.el")' 2>&1)
-          echo "$out"
-          test -z "$out"
+        run: make checkdoc
+
+      - name: Package-lint
+        run: make lint
 
       - name: Tests
-        run: |
-          emacs -Q --batch -L . -l test/jenkins-mode-test.el \
-                -f ert-run-tests-batch-and-exit
+        run: make test

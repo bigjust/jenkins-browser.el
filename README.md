@@ -109,11 +109,8 @@ running build the mode line shows `follow` and new output is appended every
 ## Development
 
 ```bash
-# byte-compile (must be warning-free)
-emacs -Q --batch -L . --eval '(setq byte-compile-error-on-warn t)' -f batch-byte-compile jenkins-mode.el
-
-# run the test suite (no Jenkins server needed)
-emacs -Q --batch -L . -l test/jenkins-mode-test.el -f ert-run-tests-batch-and-exit
+make check   # byte-compile, checkdoc, package-lint and the test suite
+make test    # just the tests (no Jenkins server needed)
 ```
 
 ## License

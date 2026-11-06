@@ -85,6 +85,10 @@ Things that are easy to get wrong:
 
 ## Running the checks
 
+`make check` runs everything below (`compile`, `checkdoc`, `lint`, `test`).
+`make lint` installs `package-lint` into `./.elpa` (git-ignored), not into your
+Emacs. The individual commands are:
+
 ```bash
 # byte-compile; keep it warning-free
 emacs -Q --batch -L . --eval '(setq byte-compile-error-on-warn t)' \
@@ -93,6 +97,9 @@ rm -f jenkins-mode.elc
 
 # docstring style
 emacs -Q --batch --eval '(checkdoc-file "jenkins-mode.el")'
+
+# MELPA package rules (needs package-lint, see `make lint`)
+make lint
 
 # tests
 emacs -Q --batch -L . -l test/jenkins-mode-test.el \
