@@ -128,7 +128,10 @@ buffer is created."
 ;;; --- Configuration & Credentials ---
 
 (defun jenkins-browser--parse-ini-file (path)
-  "Parse [jenkins] section from PATH and return an alist."
+  "Parse [jenkins] section from PATH and return an alist.
+Lines starting with `#' or `;' are comments, and a key is separated
+from its value by `=' or `:', as Jenkins Job Builder allows.  Inline
+comments are not recognised, since a token may contain `#' or `;'."
   (when (file-readable-p path)
     (with-temp-buffer
       (insert-file-contents path)
@@ -139,11 +142,13 @@ buffer is created."
                                     (line-beginning-position)
                                     (line-end-position)))))
             (cond
+             ((string-match-p "^[#;]" line))
              ((string-match-p "^\\[jenkins\\]" line)
               (setq in-jenkins-section t))
              ((string-match-p "^\\[" line)
               (setq in-jenkins-section nil))
-             ((and in-jenkins-section (string-match "^\\([^=]+\\)=\\(.*\\)$" line))
+             ((and in-jenkins-section
+                   (string-match "^\\([^=:]+\\)[=:]\\(.*\\)$" line))
               (push (cons (string-trim (match-string 1 line))
                           (string-trim (match-string 2 line)))
                     result))))

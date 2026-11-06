@@ -23,7 +23,10 @@ user=your_username
 password=your_api_token
 ```
 
-Other sections are ignored. Keep the file private (`chmod 600`).
+Other sections are ignored. Lines starting with `#` or `;` are comments, and
+keys and values may be separated by `=` or `:`. Inline comments are not
+supported, because a token may contain `#` or `;`. Keep the file private
+(`chmod 600`).
 
 ### Emacs variables
 

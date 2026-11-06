@@ -67,6 +67,23 @@
             (should (equal (cdr (assoc "password" ini)) "s3cret"))))
       (delete-file file))))
 
+(ert-deftest jenkins-browser-test-parse-ini-comments-and-colons ()
+  (let ((file (make-temp-file "jenkins-browser-ini")))
+    (unwind-protect
+        (progn
+          (with-temp-file file
+            (insert "# top comment\n[jenkins] \n; url=https://commented\n"
+                    "# user = nobody\nurl: https://j.example.com:8080\n"
+                    "user = alice\n   password = tok#en;1:2   \n"
+                    "[other]\nuser=zed\n"))
+          (let ((ini (jenkins-browser--parse-ini-file file)))
+            (should (equal (cdr (assoc "url" ini)) "https://j.example.com:8080"))
+            (should (equal (cdr (assoc "user" ini)) "alice"))
+            ;; Only the first delimiter splits; # and ; inside a value stay.
+            (should (equal (cdr (assoc "password" ini)) "tok#en;1:2"))
+            (should (= (length ini) 3))))
+      (delete-file file))))
+
 (ert-deftest jenkins-browser-test-config-prefers-custom-vars ()
   (let ((jenkins-browser-url "https://custom")
         (jenkins-browser-ini-path "/nonexistent")
