@@ -5,7 +5,7 @@
 ;; Author: Justin Caratzas
 ;; URL: https://github.com/bigjust/jenkins-browser.el
 ;; Keywords: tools, jenkins, ci
-;; Version: 0.3.0
+;; Version: 0.9.0
 ;; Package-Requires: ((emacs "27.1"))
 
 ;; This file is not part of GNU Emacs.

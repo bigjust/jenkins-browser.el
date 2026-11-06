@@ -5,6 +5,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-11-06
+
 ### Added
 
 - Artifacts browser and downloader (`*Jenkins-Artifacts*`, `a`, `M-x jenkins-browser-view-artifacts`) with in-buffer preview (`RET`/`v`) and local file download (`d`).
@@ -12,6 +14,18 @@ All notable changes to this project are documented here. The format follows
 - Build Queue viewer (`*Jenkins-Queue*`, `Q`, `M-x jenkins-browser-queue`) with item cancellation (`k` / `d`) and task navigation.
 - Re-trigger build command (`R` / `jenkins-browser-history-rebuild`) in build history to replay previous runs with historical parameters pre-filled.
 - Multiple Jenkins server profiles support (`M-x jenkins-browser-switch-server`) with interactive switching across sections in `~/.jenkins_jobs.ini`.
+- ANSI color escape sequence formatting in console log buffers and stage logs via `ansi-color-apply`.
+- Reporting assigned Queue item ID upon job trigger from HTTP 201 `Location` response headers.
+- Support for custom build `displayName` in build history entries.
+- Masked interactive input for `PasswordParameterDefinition` parameters using `read-passwd`.
+
+### Changed
+
+- `buildWithParameters` sends parameters in the POST request body (`application/x-www-form-urlencoded`) instead of query parameters.
+
+### Fixed
+
+- Duration formatting calculation handles floating-point millisecond values.
 
 ## [0.3.0] - 2026-11-06
 
@@ -71,7 +85,8 @@ All notable changes to this project are documented here. The format follows
   (including parameterized ones), view a build's console, abort builds and open
   jobs in the browser, reading credentials from `~/.jenkins_jobs.ini`.
 
-[Unreleased]: https://github.com/bigjust/jenkins-browser.el/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/bigjust/jenkins-browser.el/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/bigjust/jenkins-browser.el/compare/v0.3.0...v0.9.0
 [0.3.0]: https://github.com/bigjust/jenkins-browser.el/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/bigjust/jenkins-browser.el/commit/4284f3e
 [0.1.0]: https://github.com/bigjust/jenkins-browser.el/commit/1e77501
