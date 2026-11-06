@@ -367,6 +367,129 @@
              (should buffer-read-only))
          (kill-buffer))))))
 
+;;; HTTP layer
+
+(defvar jenkins-test--http-calls nil
+  "Requests seen by the stubbed `url-retrieve-synchronously'.
+Each element is a plist (:method :url :headers :data), newest first.")
+
+(defun jenkins-test--response-buffer (status body)
+  "Return a unibyte buffer holding an HTTP response with STATUS and BODY.
+Header lines end in a bare newline, as `url-http' leaves them."
+  (let ((buf (generate-new-buffer " *jenkins-test-response*")))
+    (with-current-buffer buf
+      (set-buffer-multibyte nil)
+      (insert (format "HTTP/1.1 %d X\nContent-Type: text/plain\n\n" status)
+              (encode-coding-string body 'utf-8))
+      (setq-local url-http-response-status status))
+    buf))
+
+(defmacro jenkins-test--with-http (responses &rest body)
+  "Run BODY with `url-retrieve-synchronously' stubbed.
+RESPONSES is a form evaluating to an alist of (URL-SUFFIX STATUS . BODY).
+The first entry whose suffix matches the request URL is used; a URL with
+no match gets a 404.  Requests are recorded in `jenkins-test--http-calls'."
+  (declare (indent 1))
+  `(let ((jenkins-test--http-calls nil)
+         (responses ,responses))
+     (cl-letf (((symbol-function 'url-retrieve-synchronously)
+                (lambda (url &rest _)
+                  (push (list :method url-request-method
+                              :url url
+                              :headers url-request-extra-headers
+                              :data url-request-data)
+                        jenkins-test--http-calls)
+                  (let ((hit (cl-find-if (lambda (r) (string-suffix-p (car r) url))
+                                         responses)))
+                    (jenkins-test--response-buffer
+                     (if hit (cadr hit) 404)
+                     (if hit (cddr hit) ""))))))
+       ,@body)))
+
+(defun jenkins-test--calls-to (suffix)
+  "Return the recorded requests whose URL ends with SUFFIX, oldest first."
+  (nreverse (cl-remove-if-not (lambda (c) (string-suffix-p suffix (plist-get c :url)))
+                              jenkins-test--http-calls)))
+
+(ert-deftest jenkins-test-http-get-sends-auth-without-crumb ()
+  (jenkins-test--with-config
+   (jenkins-test--with-http '(("/x" 200 . "hello"))
+     (should (equal (jenkins--http "GET" "https://ci.example.com/x") "hello"))
+     (should (= (length jenkins-test--http-calls) 1))
+     (let ((call (car jenkins-test--http-calls)))
+       (should (equal (plist-get call :method) "GET"))
+       (should (equal (cdr (assoc "Authorization" (plist-get call :headers)))
+                      (jenkins--auth-header)))
+       (should-not (assoc "Jenkins-Crumb" (plist-get call :headers)))))))
+
+(ert-deftest jenkins-test-http-post-attaches-crumb ()
+  (jenkins-test--with-config
+   (jenkins-test--with-http
+       '(("/crumbIssuer/api/json" 200 . "{\"crumbRequestField\":\"Jenkins-Crumb\",\"crumb\":\"abc123\"}")
+         ("/build" 201 . ""))
+     (should (equal (jenkins--http "POST" "https://ci.example.com/job/j/build") ""))
+     (let ((post (car (jenkins-test--calls-to "/build"))))
+       (should (equal (plist-get post :method) "POST"))
+       (should (equal (cdr (assoc "Jenkins-Crumb" (plist-get post :headers))) "abc123"))
+       (should (assoc "Authorization" (plist-get post :headers))))
+     ;; The crumb itself is fetched with GET.
+     (should (equal (plist-get (car (jenkins-test--calls-to "/crumbIssuer/api/json")) :method)
+                    "GET")))))
+
+(ert-deftest jenkins-test-http-post-without-crumb-endpoint ()
+  (jenkins-test--with-config
+   (jenkins-test--with-http '(("/build" 201 . ""))
+     (should (equal (jenkins--http "POST" "https://ci.example.com/job/j/build") ""))
+     (let ((post (car (jenkins-test--calls-to "/build"))))
+       (should (equal (plist-get post :method) "POST"))
+       (should (assoc "Authorization" (plist-get post :headers)))
+       (should (= (length (plist-get post :headers)) 1))))))
+
+(ert-deftest jenkins-test-http-sends-data-and-content-type ()
+  (jenkins-test--with-config
+   (jenkins-test--with-http '(("/x" 200 . "ok"))
+     (jenkins--http "PUT" "https://ci.example.com/x" "a=1" "application/x-www-form-urlencoded")
+     (let ((call (car (jenkins-test--calls-to "/x"))))
+       (should (equal (plist-get call :data) "a=1"))
+       (should (equal (cdr (assoc "Content-Type" (plist-get call :headers)))
+                      "application/x-www-form-urlencoded"))))))
+
+(ert-deftest jenkins-test-http-error-statuses ()
+  (jenkins-test--with-config
+   (dolist (status '(400 401 403 404 500 503))
+     (jenkins-test--with-http `(("/x" ,status . "nope"))
+       (let ((err (should-error (jenkins--http "GET" "https://ci.example.com/x"))))
+         (should (string-match-p (number-to-string status) (error-message-string err))))))))
+
+(ert-deftest jenkins-test-http-no-response-buffer ()
+  (jenkins-test--with-config
+   (cl-letf (((symbol-function 'url-retrieve-synchronously) (lambda (&rest _) nil)))
+     (should-error (jenkins--http "GET" "https://ci.example.com/x")))))
+
+(ert-deftest jenkins-test-http-decodes-utf-8 ()
+  (jenkins-test--with-config
+   (jenkins-test--with-http '(("/x" 200 . "caf\u00e9 \u2713"))
+     (should (equal (jenkins--http "GET" "https://ci.example.com/x") "caf\u00e9 \u2713")))))
+
+(ert-deftest jenkins-test-http-kills-response-buffer ()
+  (jenkins-test--with-config
+   (let ((before (buffer-list)))
+     (jenkins-test--with-http '(("/x" 200 . "hi") ("/y" 500 . "no"))
+       (jenkins--http "GET" "https://ci.example.com/x")
+       (ignore-errors (jenkins--http "GET" "https://ci.example.com/y")))
+     (should (equal (buffer-list) before)))))
+
+(ert-deftest jenkins-test-request-parses-json-or-returns-raw ()
+  (jenkins-test--with-config
+   (jenkins-test--with-http '(("/j" 200 . "{\"a\":[1,null,false]}")
+                              ("/t" 200 . "plain text\nlog")
+                              ("/e" 201 . ""))
+     (let ((parsed (jenkins--request "GET" "https://ci.example.com/j")))
+       (should (hash-table-p parsed))
+       (should (equal (gethash "a" parsed) '(1 nil nil))))
+     (should (equal (jenkins--request "GET" "https://ci.example.com/t") "plain text\nlog"))
+     (should (equal (jenkins--request "POST" "https://ci.example.com/e") "")))))
+
 ;;; Auto refresh
 
 (ert-deftest jenkins-test-timer-lifecycle ()
