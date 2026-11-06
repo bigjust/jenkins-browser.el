@@ -26,7 +26,8 @@ password=your_api_token
 Other sections are ignored. Lines starting with `#` or `;` are comments, and
 keys and values may be separated by `=` or `:`. Inline comments are not
 supported, because a token may contain `#` or `;`. Keep the file private
-(`chmod 600`).
+(`chmod 600`): if the password is read from an INI file that other users can
+read, Emacs shows a warning once per session (not on Windows).
 
 ### Emacs variables
 

@@ -84,6 +84,46 @@
             (should (= (length ini) 3))))
       (delete-file file))))
 
+(defmacro jenkins-browser-test--with-ini-mode (mode &rest body)
+  "Run BODY with an INI file holding a password, created with MODE.
+Collect the text of `display-warning' calls in the variable `warnings'."
+  (declare (indent 1))
+  `(let ((file (make-temp-file "jenkins-browser-ini"))
+         (jenkins-browser-url nil) (jenkins-browser-username nil)
+         (jenkins-browser-api-token nil)
+         (jenkins-browser--warned-ini-paths nil)
+         (auth-sources nil)
+         (warnings nil))
+     (unwind-protect
+         (progn
+           (with-temp-file file (insert "[jenkins]\nuser=a\npassword=b\n"))
+           (set-file-modes file ,mode)
+           (let ((jenkins-browser-ini-path file))
+             (cl-letf (((symbol-function 'display-warning)
+                        (lambda (_type message &rest _) (push message warnings))))
+               ,@body)))
+       (delete-file file))))
+
+(ert-deftest jenkins-browser-test-ini-permissions-warns-once ()
+  (skip-when (eq system-type 'windows-nt))
+  (jenkins-browser-test--with-ini-mode #o644
+    (should (equal (jenkins-browser--get-config "password") "b"))
+    (should (equal (jenkins-browser--get-config "password") "b"))
+    (should (= (length warnings) 1))
+    (should (string-match-p "chmod 600" (car warnings)))))
+
+(ert-deftest jenkins-browser-test-ini-permissions-private-file-is-silent ()
+  (skip-when (eq system-type 'windows-nt))
+  (jenkins-browser-test--with-ini-mode #o600
+    (should (equal (jenkins-browser--get-config "password") "b"))
+    (should (null warnings))))
+
+(ert-deftest jenkins-browser-test-ini-permissions-only-for-password ()
+  (skip-when (eq system-type 'windows-nt))
+  (jenkins-browser-test--with-ini-mode #o644
+    (should (equal (jenkins-browser--get-config "user") "a"))
+    (should (null warnings))))
+
 (ert-deftest jenkins-browser-test-config-prefers-custom-vars ()
   (let ((jenkins-browser-url "https://custom")
         (jenkins-browser-ini-path "/nonexistent")

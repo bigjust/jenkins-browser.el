@@ -76,3 +76,9 @@ ends the line. `c` on a build that has finished always shows its full log.
 "-" means the build has no description (set one in the Jenkins UI, or in a
 pipeline with `currentBuild.description = "..."`). The column fills the rest of
 the window, so widen the window to see more.
+
+## Warning: "contains a password but is readable by other users"
+
+The INI file holding your token is accessible to group or others. Run
+`chmod 600 ~/.jenkins_jobs.ini`. The warning is shown once per session and
+does not stop `jenkins-browser` from working.

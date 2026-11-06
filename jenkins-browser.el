@@ -155,6 +155,25 @@ comments are not recognised, since a token may contain `#' or `;'."
           (forward-line 1))
         result))))
 
+;; Paths already warned about, so the warning appears once per session.
+(defvar jenkins-browser--warned-ini-paths nil
+  "INI file names for which a permissions warning was already shown.")
+
+(defun jenkins-browser--check-ini-permissions (path)
+  "Warn once if the INI file PATH, used for a password, is not private.
+Do nothing on Windows, where file modes do not express this."
+  (unless (or (eq system-type 'windows-nt)
+              (member path jenkins-browser--warned-ini-paths))
+    (let ((mode (file-modes path)))
+      (when (and mode (not (zerop (logand mode #o077))))
+        (push path jenkins-browser--warned-ini-paths)
+        (display-warning
+         'jenkins-browser
+         (format (concat "%s contains a password but is readable by other "
+                         "users (mode %o); run `chmod 600 %s'")
+                 path mode (shell-quote-argument path))
+         :warning)))))
+
 (defun jenkins-browser--auth-source-lookup (key)
   "Return KEY (\"user\" or \"password\") from `auth-source', or nil.
 The entry is searched by the host name of the configured URL.  For
@@ -185,7 +204,10 @@ and \"password\" finally in `auth-source'.  Empty values count as unset."
       (let ((ini-val (cdr (assoc key (jenkins-browser--parse-ini-file
                                       jenkins-browser-ini-path)))))
         (cond
-         ((and ini-val (not (string-empty-p ini-val))) ini-val)
+         ((and ini-val (not (string-empty-p ini-val)))
+          (when (equal key "password")
+            (jenkins-browser--check-ini-permissions jenkins-browser-ini-path))
+          ini-val)
          ((member key '("user" "password"))
           (jenkins-browser--auth-source-lookup key)))))))
 
