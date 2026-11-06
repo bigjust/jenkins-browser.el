@@ -105,7 +105,7 @@ Collect the text of `display-warning' calls in the variable `warnings'."
        (delete-file file))))
 
 (ert-deftest jenkins-browser-test-ini-permissions-warns-once ()
-  (skip-when (eq system-type 'windows-nt))
+  (skip-unless (not (eq system-type 'windows-nt)))
   (jenkins-browser-test--with-ini-mode #o644
     (should (equal (jenkins-browser--get-config "password") "b"))
     (should (equal (jenkins-browser--get-config "password") "b"))
@@ -113,13 +113,13 @@ Collect the text of `display-warning' calls in the variable `warnings'."
     (should (string-match-p "chmod 600" (car warnings)))))
 
 (ert-deftest jenkins-browser-test-ini-permissions-private-file-is-silent ()
-  (skip-when (eq system-type 'windows-nt))
+  (skip-unless (not (eq system-type 'windows-nt)))
   (jenkins-browser-test--with-ini-mode #o600
     (should (equal (jenkins-browser--get-config "password") "b"))
     (should (null warnings))))
 
 (ert-deftest jenkins-browser-test-ini-permissions-only-for-password ()
-  (skip-when (eq system-type 'windows-nt))
+  (skip-unless (not (eq system-type 'windows-nt)))
   (jenkins-browser-test--with-ini-mode #o644
     (should (equal (jenkins-browser--get-config "user") "a"))
     (should (null warnings))))
