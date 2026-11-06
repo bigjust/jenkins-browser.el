@@ -26,7 +26,7 @@ JSON support, which every Emacs 30 build has).
 ## Installation
 
 ```bash
-git clone https://github.com/your-username/jenkins-mode.el.git ~/code/jenkins-mode.el
+git clone https://github.com/bigjust/jenkins-mode.el.git ~/code/jenkins-mode.el
 ```
 
 ```elisp
