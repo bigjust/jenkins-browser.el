@@ -1,6 +1,6 @@
 ;;; jenkins-mode-test.el --- Tests for jenkins-mode -*- lexical-binding: t; -*-
 
-;; Copyright (C) 2026 JCaratzas
+;; Copyright (C) 2026 Justin Caratzas
 
 ;; This file is not part of GNU Emacs.
 
