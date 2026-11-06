@@ -315,6 +315,30 @@
        (should (member '("POST" . "https://ci.example.com/job/job/buildWithParameters?BRANCH=feat%20x&ENV=prod")
                        calls))))))
 
+(ert-deftest jenkins-test-trigger-boolean-parameter ()
+  (jenkins-test--with-config
+   (let (calls prompts)
+     (cl-letf (((symbol-function 'jenkins--request)
+                (lambda (method url &rest _)
+                  (push (cons method url) calls)
+                  (if (string-suffix-p "/api/json" url)
+                      (jenkins-test--json
+                       "{\"property\":[{\"parameterDefinitions\":[
+                          {\"_class\":\"hudson.model.BooleanParameterDefinition\",
+                           \"name\":\"DRY\",\"defaultParameterValue\":{\"value\":true}},
+                          {\"_class\":\"hudson.model.BooleanParameterDefinition\",
+                           \"name\":\"CLEAN\",\"defaultParameterValue\":{\"value\":false}}]}]}")
+                    "")))
+               ((symbol-function 'completing-read)
+                (lambda (_prompt coll _p _r default &rest _)
+                  (push (cons coll default) prompts)
+                  default)))
+       (jenkins-trigger-job "job")
+       (should (member '("POST" . "https://ci.example.com/job/job/buildWithParameters?DRY=true&CLEAN=false")
+                       calls))
+       (should (equal (reverse prompts)
+                      '((("true" "false") . "true") (("true" "false") . "false"))))))))
+
 (ert-deftest jenkins-test-abort-urls ()
   (jenkins-test--with-config
    (let (calls)

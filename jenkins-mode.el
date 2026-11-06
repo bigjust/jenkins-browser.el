@@ -488,6 +488,13 @@ Signal a `user-error' when point is on a folder."
         (jenkins-open-folder (jenkins--join-path jenkins--folder (car id)))
       (jenkins-view-build-history (jenkins--join-path jenkins--folder (car id))))))
 
+(defun jenkins--boolean-parameter-p (param)
+  "Return non-nil if the parameter definition hash-table PARAM is a boolean.
+Jenkins expects the strings \"true\" and \"false\" for these, not Lisp values."
+  (let ((class (or (jenkins--get "_class" param) (jenkins--get "type" param))))
+    (and (stringp class)
+         (string-match-p "BooleanParameterDefinition" class))))
+
 (defun jenkins-trigger-job (job)
   "Interactively trigger JOB, prompting for parameters if defined.
 JOB is a slash-separated path such as \"folder/job\"."
@@ -513,10 +520,18 @@ JOB is a slash-separated path such as \"folder/job\"."
             (let* ((p-name (jenkins--get "name" p))
                    (p-desc (or (jenkins--get "description" p) ""))
                    (default-obj (jenkins--get "defaultParameterValue" p))
-                   (p-default (when (hash-table-p default-obj)
-                                (let ((val (jenkins--get "value" default-obj)))
-                                  (when val (format "%s" val)))))
-                   (choices (jenkins--get "choices" p))
+                   (boolean-p (jenkins--boolean-parameter-p p))
+                   (p-default (if boolean-p
+                                  (if (and (hash-table-p default-obj)
+                                           (jenkins--get "value" default-obj))
+                                      "true"
+                                    "false")
+                                (when (hash-table-p default-obj)
+                                  (let ((val (jenkins--get "value" default-obj)))
+                                    (when val (format "%s" val))))))
+                   (choices (if boolean-p
+                                '("true" "false")
+                              (jenkins--get "choices" p)))
                    (val (if (and choices (listp choices))
                             (completing-read (format "%s (%s): " p-name p-desc) choices nil t p-default)
                           (read-string (format "%s [%s] (%s): " p-name (or p-default "") p-desc)
