@@ -47,6 +47,7 @@ Everywhere a job is asked for, it is a slash-separated path such as
   - Password parameters (`PasswordParameterDefinition`) use `read-passwd` with hidden input.
   - Everything else uses `read-string` with the default pre-filled. The parameter's description is shown in the prompt.
   - The build is then queued with `buildWithParameters` (parameters are safely sent in the POST request body).
+  - If Jenkins assigns a queue item, its ID is reported in the echo area.
 
 The list refreshes two seconds after the trigger.
 

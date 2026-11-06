@@ -751,6 +751,13 @@ Jenkins expects the strings \"true\" and \"false\" for these, not Lisp values."
     (and (stringp class)
          (string-match-p "PasswordParameterDefinition" class))))
 
+(defun jenkins-browser--extract-queue-item (headers)
+  "Extract the queue item ID from HTTP response HEADERS, or nil."
+  (let ((loc (cdr (assoc "location" headers))))
+    (when (and (stringp loc)
+               (string-match "/queue/item/\\([0-9]+\\)" loc))
+      (match-string 1 loc))))
+
 (defun jenkins-browser-trigger-job (job)
   "Interactively trigger JOB, prompting for parameters if defined.
 JOB is a slash-separated path such as \"folder/job\"."
@@ -766,9 +773,12 @@ JOB is a slash-separated path such as \"folder/job\"."
          (defs-list (if (listp param-defs) param-defs nil)))
     (if (null defs-list)
         ;; Simple non-parameterized trigger
-        (progn
-          (jenkins-browser--request "POST" (jenkins-browser--job-url job "/build"))
-          (message "Triggered '%s'" job))
+        (let* ((resp (jenkins-browser--http-full "POST" (jenkins-browser--job-url job "/build")))
+               (headers (and (consp resp) (cdr resp)))
+               (queue-id (jenkins-browser--extract-queue-item headers)))
+          (if queue-id
+              (message "Triggered '%s' (queue item #%s)" job queue-id)
+            (message "Triggered '%s'" job)))
       ;; Parameterized trigger
       (let (query-params)
         (dolist (p defs-list)
@@ -803,12 +813,17 @@ JOB is a slash-separated path such as \"folder/job\"."
               (when p-name
                 (push (format "%s=%s" (url-hexify-string p-name) (url-hexify-string (or val "")))
                       query-params)))))
-        (jenkins-browser--request
-         "POST"
-         (jenkins-browser--job-url job "/buildWithParameters")
-         (string-join (nreverse query-params) "&")
-         "application/x-www-form-urlencoded")
-        (message "Triggered '%s' with parameters." job)))
+        (let* ((post-data (string-join (nreverse query-params) "&"))
+               (resp (jenkins-browser--http-full
+                      "POST"
+                      (jenkins-browser--job-url job "/buildWithParameters")
+                      post-data
+                      "application/x-www-form-urlencoded"))
+               (headers (and (consp resp) (cdr resp)))
+               (queue-id (jenkins-browser--extract-queue-item headers)))
+          (if queue-id
+              (message "Triggered '%s' with parameters (queue item #%s)" job queue-id)
+            (message "Triggered '%s' with parameters." job)))))
     (jenkins-browser--refresh-later)))
 
 (defcustom jenkins-browser-console-poll-interval 2

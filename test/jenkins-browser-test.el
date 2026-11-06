@@ -402,24 +402,33 @@ Collect the text of `display-warning' calls in the variable `warnings'."
 
 ;;; Actions
 
+(ert-deftest jenkins-browser-test-extract-queue-item ()
+  (should (equal (jenkins-browser--extract-queue-item '(("location" . "http://j/queue/item/42/"))) "42"))
+  (should (equal (jenkins-browser--extract-queue-item '(("location" . "http://j/queue/item/999"))) "999"))
+  (should (null (jenkins-browser--extract-queue-item '(("location" . "http://j/job/test/")))))
+  (should (null (jenkins-browser--extract-queue-item nil))))
+
 (ert-deftest jenkins-browser-test-trigger-simple-job ()
   (jenkins-browser-test--with-config
    (let (calls)
      (cl-letf (((symbol-function 'jenkins-browser--request)
-                (lambda (method url &rest _)
-                  (push (cons method url) calls)
+                (lambda (_method url &rest _)
                   (if (string-suffix-p "/api/json" url)
                       (jenkins-browser-test--json "{\"property\":[{}]}")
-                    ""))))
+                    "")))
+               ((symbol-function 'jenkins-browser--http-full)
+                (lambda (method url &optional data type &rest _)
+                  (push (list method url data type) calls)
+                  (cons "" '(("location" . "https://ci.example.com/queue/item/101/"))))))
        (jenkins-browser-trigger-job "team/job")
-       (should (member '("POST" . "https://ci.example.com/job/team/job/job/build") calls))))))
+       (should (equal (car calls)
+                      '("POST" "https://ci.example.com/job/team/job/job/build" nil nil)))))))
 
 (ert-deftest jenkins-browser-test-trigger-parameterized-job ()
   (jenkins-browser-test--with-config
    (let (calls)
      (cl-letf (((symbol-function 'jenkins-browser--request)
-                (lambda (method url &optional data type &rest _)
-                  (push (list method url data type) calls)
+                (lambda (_method url &rest _)
                   (if (string-suffix-p "/api/json" url)
                       (jenkins-browser-test--json
                        "{\"property\":[{\"parameterDefinitions\":[
@@ -427,6 +436,10 @@ Collect the text of `display-warning' calls in the variable `warnings'."
                            \"defaultParameterValue\":{\"value\":\"main\"}},
                           {\"name\":\"ENV\",\"choices\":[\"dev\",\"prod\"]}]}]}")
                     "")))
+               ((symbol-function 'jenkins-browser--http-full)
+                (lambda (method url &optional data type &rest _)
+                  (push (list method url data type) calls)
+                  (cons "" '(("location" . "https://ci.example.com/queue/item/102/")))))
                ((symbol-function 'read-string) (lambda (&rest _) "feat x"))
                ((symbol-function 'completing-read) (lambda (&rest _) "prod")))
        (jenkins-browser-trigger-job "job")
@@ -439,8 +452,7 @@ Collect the text of `display-warning' calls in the variable `warnings'."
   (jenkins-browser-test--with-config
    (let (calls prompts)
      (cl-letf (((symbol-function 'jenkins-browser--request)
-                (lambda (method url &optional data type &rest _)
-                  (push (list method url data type) calls)
+                (lambda (_method url &rest _)
                   (if (string-suffix-p "/api/json" url)
                       (jenkins-browser-test--json
                        "{\"property\":[{\"parameterDefinitions\":[
@@ -449,6 +461,10 @@ Collect the text of `display-warning' calls in the variable `warnings'."
                           {\"_class\":\"hudson.model.BooleanParameterDefinition\",
                            \"name\":\"CLEAN\",\"defaultParameterValue\":{\"value\":false}}]}]}")
                     "")))
+               ((symbol-function 'jenkins-browser--http-full)
+                (lambda (method url &optional data type &rest _)
+                  (push (list method url data type) calls)
+                  (cons "" nil)))
                ((symbol-function 'completing-read)
                 (lambda (_prompt coll _p _r default &rest _)
                   (push (cons coll default) prompts)
@@ -465,8 +481,7 @@ Collect the text of `display-warning' calls in the variable `warnings'."
   (jenkins-browser-test--with-config
    (let (calls passwords)
      (cl-letf (((symbol-function 'jenkins-browser--request)
-                (lambda (method url &optional data type &rest _)
-                  (push (list method url data type) calls)
+                (lambda (_method url &rest _)
                   (if (string-suffix-p "/api/json" url)
                       (jenkins-browser-test--json
                        "{\"property\":[{\"parameterDefinitions\":[
@@ -474,6 +489,10 @@ Collect the text of `display-warning' calls in the variable `warnings'."
                            \"name\":\"SECRET_KEY\",\"description\":\"auth key\",
                            \"defaultParameterValue\":{\"value\":\"defpass\"}}]}]}")
                     "")))
+               ((symbol-function 'jenkins-browser--http-full)
+                (lambda (method url &optional data type &rest _)
+                  (push (list method url data type) calls)
+                  (cons "" '(("location" . "https://ci.example.com/queue/item/555/")))))
                ((symbol-function 'read-passwd)
                 (lambda (prompt &optional _confirm default)
                   (push (cons prompt default) passwords)
@@ -484,6 +503,23 @@ Collect the text of `display-warning' calls in the variable `warnings'."
                         "SECRET_KEY=s3cr3t%21"
                         "application/x-www-form-urlencoded")))
        (should (equal passwords '(("SECRET_KEY (auth key): " . "defpass"))))))))
+
+(ert-deftest jenkins-browser-test-trigger-queue-item-feedback ()
+  (jenkins-browser-test--with-config
+   (let (messages)
+     (cl-letf (((symbol-function 'jenkins-browser--request)
+                (lambda (_method url &rest _)
+                  (if (string-suffix-p "/api/json" url)
+                      (jenkins-browser-test--json "{\"property\":[{}]}")
+                    "")))
+               ((symbol-function 'jenkins-browser--http-full)
+                (lambda (_method _url &rest _)
+                  (cons "" '(("location" . "https://ci.example.com/queue/item/789/")))))
+               ((symbol-function 'message)
+                (lambda (fmt &rest args)
+                  (push (apply #'format fmt args) messages))))
+       (jenkins-browser-trigger-job "deploy-job")
+       (should (member "Triggered 'deploy-job' (queue item #789)" messages))))))
 
 (ert-deftest jenkins-browser-test-abort-urls ()
   (jenkins-browser-test--with-config
