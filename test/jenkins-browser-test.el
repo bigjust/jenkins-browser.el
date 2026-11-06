@@ -658,6 +658,19 @@ Collect the text of `display-warning' calls in the variable `warnings'."
     (should (equal (aref (cadr (car entries)) 1) "SUCCESS"))
     (should (equal (aref (cadr (cadr entries)) 1) "FAILED"))))
 
+(ert-deftest jenkins-browser-test-artifacts-entries ()
+  (let* ((artifacts (jenkins-browser-test--json
+                     "[{\"displayPath\":\"build.log\",\"fileName\":\"build.log\",
+                       \"relativePath\":\"logs/build.log\"},
+                      {\"displayPath\":\"app.tar.gz\",\"fileName\":\"app.tar.gz\",
+                       \"relativePath\":\"target/app.tar.gz\"}]"))
+         (entries (jenkins-browser--artifacts-entries artifacts)))
+    (should (= (length entries) 2))
+    (should (equal (car (car entries)) "logs/build.log"))
+    (should (equal (aref (cadr (car entries)) 0) "build.log"))
+    (should (equal (aref (cadr (car entries)) 1) "logs/build.log"))
+    (should (equal (aref (cadr (cadr entries)) 0) "app.tar.gz"))))
+
 (ert-deftest jenkins-browser-test-abort-urls ()
   (jenkins-browser-test--with-config
    (let (calls)

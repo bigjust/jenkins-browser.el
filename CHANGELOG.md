@@ -7,6 +7,7 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- Artifacts browser and downloader (`*Jenkins-Artifacts*`, `a`, `M-x jenkins-browser-view-artifacts`) with in-buffer preview (`RET`/`v`) and local file download (`d`).
 - Pipeline Stage View and Step Inspector (`*Jenkins-Stages*`, `s`, `M-x jenkins-browser-view-stages`) via `wfapi`, with stage status, timing, and per-stage log viewing (`l`).
 - Build Queue viewer (`*Jenkins-Queue*`, `Q`, `M-x jenkins-browser-queue`) with item cancellation (`k` / `d`) and task navigation.
 - Re-trigger build command (`R` / `jenkins-browser-history-rebuild`) in build history to replay previous runs with historical parameters pre-filled.

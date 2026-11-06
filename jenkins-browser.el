@@ -1239,6 +1239,7 @@ If the build is still running the buffer follows it, see
 (define-key jenkins-browser-build-history-mode-map (kbd "k")   #'jenkins-browser-history-abort-build)
 (define-key jenkins-browser-build-history-mode-map (kbd "R")   #'jenkins-browser-history-rebuild)
 (define-key jenkins-browser-build-history-mode-map (kbd "s")   #'jenkins-browser-history-view-stages)
+(define-key jenkins-browser-build-history-mode-map (kbd "a")   #'jenkins-browser-history-view-artifacts)
 (define-key jenkins-browser-build-history-mode-map (kbd "Q")   #'jenkins-browser-queue)
 (define-key jenkins-browser-build-history-mode-map (kbd "o")   #'jenkins-browser-history-open-in-browser)
 
@@ -1272,6 +1273,7 @@ If the build is still running the buffer follows it, see
 (define-key jenkins-browser-mode-map (kbd "c")   #'jenkins-browser-view-console)
 (define-key jenkins-browser-mode-map (kbd "k")   #'jenkins-browser-abort-build)
 (define-key jenkins-browser-mode-map (kbd "s")   #'jenkins-browser-view-stages)
+(define-key jenkins-browser-mode-map (kbd "a")   #'jenkins-browser-view-artifacts)
 (define-key jenkins-browser-mode-map (kbd "Q")   #'jenkins-browser-queue)
 (define-key jenkins-browser-mode-map (kbd "f")   #'jenkins-browser-toggle-running-filter)
 (define-key jenkins-browser-mode-map (kbd "o")   #'jenkins-browser-open-in-browser)
@@ -1561,6 +1563,148 @@ If the build is still running the buffer follows it, see
        (setq jenkins-browser--stages-job job
              jenkins-browser--stages-build build)
        (jenkins-browser-stages-refresh))
+     #'pop-to-buffer)))
+
+;;; --- Build Artifacts Mode ---
+
+(defvar-local jenkins-browser--artifacts-job nil
+  "Job path for the current artifacts buffer.")
+
+(defvar-local jenkins-browser--artifacts-build nil
+  "Build number for the current artifacts buffer.")
+
+(defvar jenkins-browser-artifacts-mode-map (make-sparse-keymap)
+  "Keymap for `jenkins-browser-artifacts-mode` buffers.")
+(set-keymap-parent jenkins-browser-artifacts-mode-map tabulated-list-mode-map)
+(define-key jenkins-browser-artifacts-mode-map (kbd "g")   #'jenkins-browser-artifacts-refresh)
+(define-key jenkins-browser-artifacts-mode-map (kbd "RET") #'jenkins-browser-artifacts-view-file)
+(define-key jenkins-browser-artifacts-mode-map [return]    #'jenkins-browser-artifacts-view-file)
+(define-key jenkins-browser-artifacts-mode-map (kbd "v")   #'jenkins-browser-artifacts-view-file)
+(define-key jenkins-browser-artifacts-mode-map (kbd "d")   #'jenkins-browser-artifacts-download-file)
+(define-key jenkins-browser-artifacts-mode-map (kbd "o")   #'jenkins-browser-artifacts-open-in-browser)
+
+(define-derived-mode jenkins-browser-artifacts-mode tabulated-list-mode "Jenkins-Artifacts"
+  "Major mode for browsing artifacts of a Jenkins build.
+
+\\{jenkins-browser-artifacts-mode-map}"
+  :keymap jenkins-browser-artifacts-mode-map
+  (setq tabulated-list-format
+        [("File Name"     35 t)
+         ("Relative Path"  0 nil)])
+  (setq tabulated-list-padding 2)
+  (setq tabulated-list-sort-key (cons "File Name" nil))
+  (add-hook 'tabulated-list-revert-hook #'jenkins-browser-artifacts-refresh nil t)
+  (hl-line-mode 1)
+  (tabulated-list-init-header))
+
+(defun jenkins-browser--fetch-artifacts (job build-num)
+  "Fetch artifacts list for BUILD-NUM of JOB."
+  (let* ((tree (url-hexify-string "artifacts[displayPath,fileName,relativePath]"))
+         (url (jenkins-browser--job-url job (format "/%s/api/json?tree=%s" build-num tree)))
+         (resp (jenkins-browser--request "GET" url)))
+    (when (hash-table-p resp)
+      (jenkins-browser--get "artifacts" resp))))
+
+(defun jenkins-browser--artifacts-entries (artifacts)
+  "Generate tabulated list entries from ARTIFACTS list."
+  (let (entries)
+    (dolist (art (if (listp artifacts) artifacts nil))
+      (when (hash-table-p art)
+        (let ((name (or (jenkins-browser--get "fileName" art)
+                        (jenkins-browser--get "displayPath" art)
+                        "file"))
+              (path (jenkins-browser--get "relativePath" art)))
+          (when path
+            (push (list path
+                        (vector (propertize name 'face 'font-lock-keyword-face)
+                                (propertize path 'face 'font-lock-type-face)))
+                  entries)))))
+    (nreverse entries)))
+
+(defun jenkins-browser-artifacts-refresh ()
+  "Refresh the artifacts buffer."
+  (interactive)
+  (when (and jenkins-browser--artifacts-job jenkins-browser--artifacts-build)
+    (let ((artifacts (jenkins-browser--fetch-artifacts
+                      jenkins-browser--artifacts-job
+                      jenkins-browser--artifacts-build)))
+      (setq tabulated-list-entries (jenkins-browser--artifacts-entries artifacts))
+      (tabulated-list-print t))))
+
+(defun jenkins-browser-artifacts-view-file ()
+  "View the artifact at point in an Emacs buffer."
+  (interactive)
+  (let ((rel-path (tabulated-list-get-id)))
+    (unless rel-path
+      (user-error "No artifact selected"))
+    (let* ((url (jenkins-browser--job-url
+                 jenkins-browser--artifacts-job
+                 (format "/%s/artifact/%s"
+                         jenkins-browser--artifacts-build
+                         (url-hexify-string rel-path))))
+           (raw-body (jenkins-browser--http "GET" url)))
+      (jenkins-browser--open-buffer
+       (format "*Jenkins-Artifact: %s*" (file-name-nondirectory rel-path))
+       (lambda ()
+         (let ((inhibit-read-only t))
+           (erase-buffer)
+           (insert raw-body)
+           (goto-char (point-min))
+           (set-buffer-modified-p nil)
+           (view-mode 1)))
+       #'pop-to-buffer))))
+
+(defun jenkins-browser-artifacts-download-file (dest-path)
+  "Download the artifact at point to DEST-PATH."
+  (interactive
+   (let* ((rel-path (tabulated-list-get-id))
+          (fname (if rel-path (file-name-nondirectory rel-path) "artifact")))
+     (list (read-file-name "Save artifact as: " default-directory nil nil fname))))
+  (let ((rel-path (tabulated-list-get-id)))
+    (unless rel-path
+      (user-error "No artifact selected"))
+    (let* ((url (jenkins-browser--job-url
+                 jenkins-browser--artifacts-job
+                 (format "/%s/artifact/%s"
+                         jenkins-browser--artifacts-build
+                         (url-hexify-string rel-path))))
+           (raw-bytes (car (jenkins-browser--http-full "GET" url nil nil t))))
+      (with-temp-file dest-path
+        (set-buffer-multibyte nil)
+        (insert raw-bytes))
+      (message "Saved %s to %s" rel-path dest-path))))
+
+(defun jenkins-browser-artifacts-open-in-browser ()
+  "Open the artifact at point in the web browser."
+  (interactive)
+  (let ((rel-path (tabulated-list-get-id)))
+    (unless rel-path
+      (user-error "No artifact selected"))
+    (browse-url (jenkins-browser--job-url
+                 jenkins-browser--artifacts-job
+                 (format "/%s/artifact/%s"
+                         jenkins-browser--artifacts-build
+                         (url-hexify-string rel-path))))))
+
+(defun jenkins-browser-history-view-artifacts (&optional build-num)
+  "View artifacts for BUILD-NUM of the current job."
+  (interactive (list (or (jenkins-browser-current-build-number) (user-error "No build selected"))))
+  (unless (and jenkins-browser--history-job build-num)
+    (user-error "Cannot view artifacts: missing job or build number"))
+  (jenkins-browser-view-artifacts jenkins-browser--history-job build-num))
+
+(defun jenkins-browser-view-artifacts (job &optional build-number)
+  "View artifacts for BUILD-NUMBER (default \"lastBuild\") of JOB."
+  (interactive (list (jenkins-browser--read-job "Artifacts for job: ")))
+  (let* ((build-id (or (and build-number (format "%s" build-number)) "lastBuild"))
+         (build (jenkins-browser--resolve-build job build-id)))
+    (jenkins-browser--open-buffer
+     (format "*Jenkins-Artifacts: %s #%s*" job build)
+     (lambda ()
+       (jenkins-browser-artifacts-mode)
+       (setq jenkins-browser--artifacts-job job
+             jenkins-browser--artifacts-build build)
+       (jenkins-browser-artifacts-refresh))
      #'pop-to-buffer)))
 
 ;;;###autoload

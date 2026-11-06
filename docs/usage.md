@@ -79,6 +79,7 @@ are truncated (use `M-x toggle-truncate-lines` or widen the window).
 | `RET`, `c` | Console of the build at point |
 | `R` | Re-trigger build with previous parameters pre-filled |
 | `s` | View pipeline stages |
+| `a` | View build artifacts |
 | `Q` | Open the Jenkins build queue |
 | `k` | Abort the build at point (after confirmation) |
 | `o` | Open the build in the browser |
@@ -135,6 +136,14 @@ Pressing `s` on a job or build opens `*Jenkins-Stages: <job> #<build>*`
 - `l` opens the execution log for the specific stage at point.
 - `RET` / `c` opens the full build console.
 
+### Artifacts browser (`a`)
+
+Pressing `a` on a job or build opens `*Jenkins-Artifacts: <job> #<build>*`:
+
+- `RET` / `v` previews the artifact directly in an Emacs buffer (`view-mode`).
+- `d` downloads and saves the artifact to a local file.
+- `o` opens the artifact in the web browser.
+
 ### Multiple server profiles
 
 `M-x jenkins-browser-switch-server` lets you switch between different Jenkins
@@ -155,6 +164,7 @@ instances configured in `~/.jenkins_jobs.ini` (e.g. `[jenkins]`, `[staging]`, `[
 | `jenkins-browser-history-rebuild` | Re-trigger build with previous parameters |
 | `jenkins-browser-view-build-history` | Show a job's builds |
 | `jenkins-browser-view-stages` | Show pipeline stages for a build |
+| `jenkins-browser-view-artifacts` | Browse artifacts for a build |
 | `jenkins-browser-view-console` | Show a build's console |
 | `jenkins-browser-abort-build` | Abort a job's last build |
 | `jenkins-browser-open-in-browser` | Open a job in the browser |

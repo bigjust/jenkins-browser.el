@@ -19,6 +19,7 @@ The file is organised in sections, top to bottom:
 | Console | `jenkins-browser-console-mode`, `jenkins-browser-view-console`, and the live-follow functions `jenkins-browser--console-fetch`, `jenkins-browser--console-apply`, `jenkins-browser--console-split` |
 | Build Queue | `jenkins-browser-queue-mode`, `jenkins-browser-queue`, `jenkins-browser--fetch-queue`, `jenkins-browser-queue-cancel-item` |
 | Pipeline Stages | `jenkins-browser-stages-mode`, `jenkins-browser-view-stages`, `jenkins-browser--fetch-stages`, `jenkins-browser-stages-view-stage-log` |
+| Artifacts | `jenkins-browser-artifacts-mode`, `jenkins-browser-view-artifacts`, `jenkins-browser-artifacts-view-file`, `jenkins-browser-artifacts-download-file` |
 
 ## Concepts
 

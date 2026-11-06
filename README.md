@@ -19,6 +19,7 @@ JSON support, which every Emacs 30 build has).
 - **Build history**: build number, status, timestamp, **author (culprits)**, duration and **description** for the most recent builds (`jenkins-browser-history-limit`, default 50).
 - **Pipeline Stage View (`s`)**: view stages, per-stage status/duration, and individual stage execution logs.
 - **Build Queue (`Q`)**: inspect queued builds, queue reasons, elapsed time, and cancel queued items.
+- **Artifacts Browser (`a`)**: list build artifacts, preview them in Emacs, or download them locally.
 - **Console viewer**: `^M` characters and Jenkins' hidden console annotations are stripped and the buffer is read-only. Any build can be opened, not just the latest. A running build is **followed live**: new output is fetched in the background and appended.
 - **Abort** the last build from the jobs list, or a specific build from the history.
 - **Server Profiles**: switch between multiple Jenkins instances defined in `~/.jenkins_jobs.ini` using `M-x jenkins-browser-switch-server`.
@@ -83,6 +84,7 @@ All options, including views, timeouts and auto-refresh, are covered in
 | `c` | View console output of the latest build |
 | `b` | Trigger / build job (prompts for parameters) |
 | `s` | View pipeline stages of the latest build |
+| `a` | View artifacts of the latest build |
 | `Q` | Open the Jenkins build queue |
 | `f` | Toggle all jobs / running only |
 | `k` | Abort the latest build |
@@ -97,6 +99,7 @@ All options, including views, timeouts and auto-refresh, are covered in
 | `RET` / `c` | View console output for the build at point |
 | `R` | Re-trigger build with previous parameters pre-filled |
 | `s` | View pipeline stages for the build at point |
+| `a` | View artifacts for the build at point |
 | `k` | Abort the build at point |
 | `Q` | Open the Jenkins build queue |
 | `g` | Refresh |
@@ -121,6 +124,16 @@ All options, including views, timeouts and auto-refresh, are covered in
 | `l` | View log output for the stage at point |
 | `g` | Refresh |
 | `o` | Open pipeline build in the browser |
+| `q` | Quit window |
+
+### Artifacts (`*Jenkins-Artifacts: <job> #<n>*`)
+
+| Key | Action |
+| --- | --- |
+| `RET` / `v` | View/preview artifact in Emacs buffer |
+| `d` | Download artifact to a local file |
+| `g` | Refresh |
+| `o` | Open artifact URL in the browser |
 | `q` | Quit window |
 
 ### Console (`*Jenkins-Console: <job> #<n>*`)
