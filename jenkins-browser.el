@@ -3,7 +3,7 @@
 ;; Copyright (C) 2026 Justin Caratzas
 
 ;; Author: Justin Caratzas
-;; URL: https://github.com/bigjust/jenkins-browser
+;; URL: https://github.com/bigjust/jenkins-browser.el
 ;; Keywords: tools, jenkins, ci
 ;; Version: 0.2.0
 ;; Package-Requires: ((emacs "27.1"))

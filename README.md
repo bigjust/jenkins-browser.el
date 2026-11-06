@@ -26,7 +26,7 @@ JSON support, which every Emacs 30 build has).
 ## Installation
 
 ```bash
-git clone https://github.com/bigjust/jenkins-browser.git ~/code/jenkins-browser
+git clone https://github.com/bigjust/jenkins-browser.el.git ~/code/jenkins-browser
 ```
 
 ```elisp
