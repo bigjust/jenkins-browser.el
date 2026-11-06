@@ -32,8 +32,25 @@
          (jenkins-browser-username "bob")
          (jenkins-browser-api-token "tok")
          (jenkins-browser-view-name nil)
-         (jenkins-browser--crumb-cache nil))
+         (jenkins-browser--crumb-cache nil)
+         (auth-sources nil))
      ,@body))
+
+(defmacro jenkins-browser-test--with-authinfo (contents &rest body)
+  "Run BODY with CONTENTS as the only `auth-source' file and no INI file."
+  (declare (indent 1))
+  `(let ((file (make-temp-file "jenkins-browser-authinfo"))
+         (auth-source-do-cache nil)
+         (jenkins-browser-url "https://ci.example.com/")
+         (jenkins-browser-username nil)
+         (jenkins-browser-api-token nil)
+         (jenkins-browser-ini-path "/nonexistent"))
+     (unwind-protect
+         (progn
+           (with-temp-file file (insert ,contents))
+           (let ((auth-sources (list file)))
+             ,@body))
+       (delete-file file))))
 
 ;;; Config
 
@@ -52,16 +69,59 @@
 
 (ert-deftest jenkins-browser-test-config-prefers-custom-vars ()
   (let ((jenkins-browser-url "https://custom")
-        (jenkins-browser-ini-path "/nonexistent"))
+        (jenkins-browser-ini-path "/nonexistent")
+        (auth-sources nil))
     (should (equal (jenkins-browser--get-config "url") "https://custom"))
     (should (null (jenkins-browser--get-config "user")))))
+
+(ert-deftest jenkins-browser-test-auth-source-fallback ()
+  (jenkins-browser-test--with-authinfo
+      "machine ci.example.com login alice password s3cret\n"
+    (should (equal (jenkins-browser--get-config "user") "alice"))
+    (should (equal (jenkins-browser--get-config "password") "s3cret"))
+    (should (equal (jenkins-browser--auth-header)
+                   (concat "Basic " (base64-encode-string "alice:s3cret" t))))))
+
+(ert-deftest jenkins-browser-test-auth-source-matches-configured-user ()
+  (jenkins-browser-test--with-authinfo
+      (concat "machine ci.example.com login alice password one\n"
+              "machine ci.example.com login bob password two\n")
+    (let ((jenkins-browser-username "bob"))
+      (should (equal (jenkins-browser--get-config "password") "two")))))
+
+(ert-deftest jenkins-browser-test-auth-source-other-host-ignored ()
+  (jenkins-browser-test--with-authinfo
+      "machine other.example.com login alice password s3cret\n"
+    (should (null (jenkins-browser--get-config "user")))
+    (should (null (jenkins-browser--get-config "password")))
+    (should (null (jenkins-browser--auth-header)))))
+
+(ert-deftest jenkins-browser-test-config-prefers-ini-over-auth-source ()
+  (jenkins-browser-test--with-authinfo
+      "machine ci.example.com login alice password from-authinfo\n"
+    (let ((ini (make-temp-file "jenkins-browser-ini")))
+      (unwind-protect
+          (let ((jenkins-browser-ini-path ini))
+            (with-temp-file ini
+              (insert "[jenkins]\nuser=carol\npassword=from-ini\n"))
+            (should (equal (jenkins-browser--get-config "user") "carol"))
+            (should (equal (jenkins-browser--get-config "password")
+                           "from-ini")))
+        (delete-file ini)))))
+
+(ert-deftest jenkins-browser-test-auth-source-needs-url ()
+  (jenkins-browser-test--with-authinfo
+      "machine ci.example.com login alice password s3cret\n"
+    (let ((jenkins-browser-url nil))
+      (should (null (jenkins-browser--get-config "user"))))))
 
 (ert-deftest jenkins-browser-test-base-url-strips-slash ()
   (jenkins-browser-test--with-config
    (should (equal (jenkins-browser-base-url) "https://ci.example.com"))))
 
 (ert-deftest jenkins-browser-test-base-url-unconfigured ()
-  (let ((jenkins-browser-url nil) (jenkins-browser-ini-path "/nonexistent"))
+  (let ((jenkins-browser-url nil) (jenkins-browser-ini-path "/nonexistent")
+        (auth-sources nil))
     (should-error (jenkins-browser-base-url))))
 
 (ert-deftest jenkins-browser-test-auth-header ()

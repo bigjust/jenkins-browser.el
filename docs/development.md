@@ -9,7 +9,7 @@ The file is organised in sections, top to bottom:
 
 | Section | Contents |
 | --- | --- |
-| Configuration & Credentials | `jenkins-browser--parse-ini-file`, `jenkins-browser--get-config`, `jenkins-browser-base-url`, `jenkins-browser--auth-header` |
+| Configuration & Credentials | `jenkins-browser--parse-ini-file`, `jenkins-browser--get-config`, `jenkins-browser--auth-source-lookup`, `jenkins-browser-base-url`, `jenkins-browser--auth-header` |
 | Job paths | `jenkins-browser--job-path`, `jenkins-browser--job-url`, `jenkins-browser--join-path` |
 | API & HTTP helper | `jenkins-browser--http` (raw body), `jenkins-browser--request` (parsed JSON), `jenkins-browser--send`, `jenkins-browser--crumb`, `jenkins-browser--fetch-crumb`, `jenkins-browser--get` |
 | Core Jenkins queries | `jenkins-browser--jobs-url`, `jenkins-browser--fetch-jobs`, `jenkins-browser--folder-p`, formatting helpers |

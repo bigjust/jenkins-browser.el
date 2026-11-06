@@ -21,7 +21,7 @@ JSON support, which every Emacs 30 build has).
 - **CSRF crumbs** are handled automatically on `POST`.
 - **HTTP errors** (401, 403, 404, ...) show up as Emacs errors rather than being parsed as data.
 - **Optional auto-refresh** of visible Jenkins buffers.
-- **Zero-config credentials**: reads `~/.jenkins_jobs.ini`, or use `M-x customize-group RET jenkins-browser`.
+- **Zero-config credentials**: reads `~/.jenkins_jobs.ini` or `auth-source`, or use `M-x customize-group RET jenkins-browser`.
 
 ## Installation
 
@@ -56,6 +56,13 @@ Or set the variables directly:
 (setq jenkins-browser-url "https://jenkins.example.com"
       jenkins-browser-username "your_username"
       jenkins-browser-api-token "your_api_token")
+```
+
+Or keep the username and token in `auth-source` (for example `~/.authinfo.gpg`),
+with the URL set as above:
+
+```
+machine jenkins.example.com login your_username password your_api_token
 ```
 
 All options, including views, timeouts and auto-refresh, are covered in

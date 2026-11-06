@@ -7,6 +7,7 @@ token (or password). For each one, the first source that has a non-empty value w
 
 1. The Emacs variable (`jenkins-browser-url`, `jenkins-browser-username`, `jenkins-browser-api-token`).
 2. The `[jenkins]` section of the INI file (`jenkins-browser-ini-path`, default `~/.jenkins_jobs.ini`).
+3. For the username and password only: [`auth-source`](#auth-source) (for example `~/.authinfo.gpg`).
 
 Because lookup happens per value, you can keep the URL in your Emacs config
 and the token in the INI file, or the other way round.
@@ -32,12 +33,25 @@ Other sections are ignored. Keep the file private (`chmod 600`).
       jenkins-browser-api-token "your_api_token")
 ```
 
-Avoid committing tokens to a dotfiles repository. Prefer the INI file, or load
-the token at startup from `auth-source`, `pass`, or similar:
+Avoid committing tokens to a dotfiles repository. Prefer `auth-source` or the
+INI file.
 
-```elisp
-(setq jenkins-browser-api-token (auth-source-pick-first-password :host "jenkins.example.com"))
+### auth-source
+
+If the username or password is not set by a variable or in the INI file,
+`jenkins-browser` asks `auth-source` for an entry whose host is the host name of
+the Jenkins URL (without scheme, port or path). A line in `~/.authinfo.gpg`
+(or any file in `auth-sources`) looks like this:
+
 ```
+machine jenkins.example.com login your_username password your_api_token
+```
+
+The URL itself must still come from `jenkins-browser-url` or the INI file.
+When the username is already known, only an entry for that user matches, so
+you can keep several accounts for one host. The lookup runs for each request,
+so use an encrypted file or `auth-source-pass` and let `auth-source` cache the
+result (the default) to avoid repeated decryption prompts.
 
 An API token can be generated in Jenkins under
 *People > your user > Configure > API Token*.

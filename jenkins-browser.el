@@ -33,7 +33,7 @@
 ;; Start with `M-x jenkins-browser'.
 ;;
 ;; Credentials and Jenkins URL can be configured via customize options or
-;; automatically loaded from `~/.jenkins_jobs.ini'.
+;; automatically loaded from `~/.jenkins_jobs.ini' or `auth-source'.
 ;;
 ;; Jobs are addressed by a slash-separated path such as "folder/sub/job".
 ;; Jenkins job names cannot contain a slash, so this is unambiguous.
@@ -53,6 +53,7 @@
 (require 'subr-x)
 (require 'cl-lib)
 (require 'find-func)
+(require 'auth-source)
 
 (defgroup jenkins-browser nil
   "Interact with Jenkins from Emacs."
@@ -149,16 +150,39 @@ buffer is created."
           (forward-line 1))
         result))))
 
+(defun jenkins-browser--auth-source-lookup (key)
+  "Return KEY (\"user\" or \"password\") from `auth-source', or nil.
+The entry is searched by the host name of the configured URL.  For
+\"password\" the user name found by `jenkins-browser--get-config' is
+used to pick the entry, so both values come from the same one."
+  (let* ((url (jenkins-browser--get-config "url"))
+         (host (and url (url-host (url-generic-parse-url url))))
+         (user (and host (equal key "password")
+                    (jenkins-browser--get-config "user"))))
+    (when host
+      (let* ((spec (append (list :host host :max 1
+                                 :require (list (if user :secret :user)))
+                           (and user (list :user user))))
+             (entry (car (apply #'auth-source-search spec)))
+             (value (plist-get entry (if (equal key "user") :user :secret))))
+        (if (functionp value) (funcall value) value)))))
+
 (defun jenkins-browser--get-config (key)
-  "Retrieve KEY (\"url\", \"user\", or \"password\") from custom vars or INI file."
+  "Retrieve KEY (\"url\", \"user\", or \"password\").
+Look in the custom variables first, then the INI file, and for \"user\"
+and \"password\" finally in `auth-source'.  Empty values count as unset."
   (let ((custom-val (pcase key
                       ("url" jenkins-browser-url)
                       ("user" jenkins-browser-username)
                       ("password" jenkins-browser-api-token))))
     (if (and custom-val (not (string-empty-p custom-val)))
         custom-val
-      (let ((ini (jenkins-browser--parse-ini-file jenkins-browser-ini-path)))
-        (cdr (assoc key ini))))))
+      (let ((ini-val (cdr (assoc key (jenkins-browser--parse-ini-file
+                                      jenkins-browser-ini-path)))))
+        (cond
+         ((and ini-val (not (string-empty-p ini-val))) ini-val)
+         ((member key '("user" "password"))
+          (jenkins-browser--auth-source-lookup key)))))))
 
 (defun jenkins-browser-base-url ()
   "Get sanitized Jenkins base URL without trailing slash."
