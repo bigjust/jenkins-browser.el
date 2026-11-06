@@ -367,6 +367,50 @@
              (should buffer-read-only))
          (kill-buffer))))))
 
+;;; Failed loads
+
+(defun jenkins-test--jenkins-buffers ()
+  "Return the names of live buffers that start with \"*Jenkins\"."
+  (sort (cl-loop for b in (buffer-list)
+                 when (string-prefix-p "*Jenkins" (buffer-name b))
+                 collect (buffer-name b))
+        #'string<))
+
+(ert-deftest jenkins-test-failed-first-load-leaves-no-buffer ()
+  (jenkins-test--with-config
+   (let ((before (jenkins-test--jenkins-buffers)))
+     (cl-letf (((symbol-function 'jenkins--request)
+                (lambda (&rest _) (error "Jenkins returned HTTP 401")))
+               ((symbol-function 'pop-to-buffer) #'ignore)
+               ((symbol-function 'pop-to-buffer-same-window) #'ignore))
+       (dolist (open (list #'jenkins
+                           (lambda () (jenkins-open-folder "a/b"))
+                           (lambda () (jenkins-view-build-history "a/b"))))
+         (let ((err (should-error (funcall open))))
+           (should (string-match-p "HTTP 401" (error-message-string err))))))
+     (should (equal (jenkins-test--jenkins-buffers) before)))))
+
+(ert-deftest jenkins-test-failed-reopen-keeps-existing-buffer ()
+  (jenkins-test--with-config
+   (let ((fail nil))
+     (cl-letf (((symbol-function 'jenkins--request)
+                (lambda (&rest _)
+                  (if fail
+                      (error "Jenkins returned HTTP 503")
+                    (jenkins-test--json
+                     "{\"jobs\":[{\"_class\":\"hudson.model.FreeStyleProject\",\"name\":\"j1\"}]}"))))
+               ((symbol-function 'pop-to-buffer) #'ignore))
+       (unwind-protect
+           (progn
+             (jenkins)
+             (setq fail t)
+             (should-error (jenkins))
+             (with-current-buffer "*Jenkins*"
+               (should (derived-mode-p 'jenkins-mode))
+               (should (= (length tabulated-list-entries) 1))))
+         (when (get-buffer "*Jenkins*")
+           (kill-buffer "*Jenkins*")))))))
+
 ;;; HTTP layer
 
 (defvar jenkins-test--http-calls nil

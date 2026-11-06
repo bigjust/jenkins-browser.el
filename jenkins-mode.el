@@ -462,14 +462,31 @@ Signal a `user-error' when point is on a folder."
       (let ((job (completing-read prompt (jenkins--job-names))))
         (if (string-empty-p job) (user-error "No job selected") job))))))
 
+(defun jenkins--open-buffer (name setup display)
+  "Create or reuse the buffer NAME, run SETUP in it and show it with DISPLAY.
+SETUP loads the buffer's contents.  If it signals an error and the buffer
+was created by this call, kill the buffer so that no empty Jenkins buffer
+is left behind, and re-signal.  A buffer that already existed is kept."
+  (let* ((existing (get-buffer name))
+         (buf (or existing (get-buffer-create name))))
+    (condition-case err
+        (with-current-buffer buf
+          (funcall setup))
+      (error
+       (unless existing
+         (kill-buffer buf))
+       (signal (car err) (cdr err))))
+    (funcall display buf)))
+
 (defun jenkins-open-folder (folder)
   "Open a jobs buffer listing the jobs in FOLDER (a slash-separated path)."
-  (let ((buf (get-buffer-create (format "*Jenkins: %s*" folder))))
-    (with-current-buffer buf
-      (jenkins-mode)
-      (setq jenkins--folder folder)
-      (jenkins-refresh))
-    (pop-to-buffer-same-window buf)))
+  (jenkins--open-buffer
+   (format "*Jenkins: %s*" folder)
+   (lambda ()
+     (jenkins-mode)
+     (setq jenkins--folder folder)
+     (jenkins-refresh))
+   #'pop-to-buffer-same-window))
 
 (defun jenkins-enter ()
   "Open the folder at point, or the build history of the job at point."
@@ -648,12 +665,13 @@ JOB is a slash-separated path such as \"folder/job\"."
   (interactive (list (jenkins--read-job "Job: ")))
   (unless job
     (user-error "No job selected"))
-  (let ((buf (get-buffer-create (format "*Jenkins-History: %s*" job))))
-    (with-current-buffer buf
-      (jenkins-build-history-mode)
-      (setq jenkins--history-job job)
-      (jenkins-history-refresh))
-    (pop-to-buffer buf)))
+  (jenkins--open-buffer
+   (format "*Jenkins-History: %s*" job)
+   (lambda ()
+     (jenkins-build-history-mode)
+     (setq jenkins--history-job job)
+     (jenkins-history-refresh))
+   #'pop-to-buffer))
 
 ;;; --- Mode Definitions and Keymaps ---
 
@@ -720,11 +738,12 @@ JOB is a slash-separated path such as \"folder/job\"."
 (defun jenkins ()
   "Open the Jenkins jobs overview buffer."
   (interactive)
-  (let ((buf (get-buffer-create "*Jenkins*")))
-    (with-current-buffer buf
-      (jenkins-mode)
-      (jenkins-refresh))
-    (pop-to-buffer buf)))
+  (jenkins--open-buffer
+   "*Jenkins*"
+   (lambda ()
+     (jenkins-mode)
+     (jenkins-refresh))
+   #'pop-to-buffer))
 
 ;;;###autoload
 (defun jenkins-reload ()
